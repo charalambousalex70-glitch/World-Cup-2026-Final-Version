@@ -540,7 +540,7 @@ window.openCreate=()=>{
      uses LIVE data + WebSocket updates.
    - Otherwise it runs in DEMO mode with the seeded data above.
    ============================================================ */
-window.__API_URL__ = window.__API_URL__ || "https://sweepstake-api-0myw.onrender.com"; // e.g. "https://sweepstake-api.onrender.com"
+window.__API_URL__ = window.__API_URL__ || "https://sweepstake-api-0myw.onrender.com";
 let LIVE=false, JWT=null, SID=null, wsClose=null;
 const API=()=>`${window.__API_URL__}/api/v1`;
 
