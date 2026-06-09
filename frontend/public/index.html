@@ -249,11 +249,12 @@ function renderAuth(){
     <h1>Sweep<span class="gold">Stake</span><br>Live</h1>
     <p class="mut" style="margin:12px 0 26px;font-size:14px">Real-time football sweepstakes for your crew.</p>
     <div style="display:flex;flex-direction:column;gap:12px;text-align:left">
+      <div><div class="label" style="margin-bottom:6px">Name <span class="mut" style="text-transform:none;font-weight:400">(only needed to create an account)</span></div><input id="un" placeholder="Your name" value=""></div>
       <div><div class="label" style="margin-bottom:6px">Email</div><input id="em" placeholder="you@example.com" value="you@example.com"></div>
       <div><div class="label" style="margin-bottom:6px">Password</div><input id="pw" type="password" placeholder="••••••••" value="demo1234"></div>
     </div>
     <button id="loginbtn" class="btn gold" style="margin-top:22px" onclick="doLogin()">Sign In</button>
-    <button class="btn ghost" style="margin-top:10px" onclick="doLogin()">Create Account</button>
+    <button class="btn ghost" style="margin-top:10px" onclick="doRegister()">Create Account</button>
     <p class="mut" style="margin-top:22px;font-size:12px">Connects to your live backend · <a href="#" onclick="showDiag();return false" style="color:var(--gold)">backend settings 🔧</a></p>
   </div>`;
 }
@@ -642,6 +643,38 @@ window.doLogin=async()=>{
     if(ok){toast('Connected · live data','✅');}
     else{toast('Demo mode — tap the 🔧 to fix the backend','⚠️');}
   },300);
+};
+window.doRegister=async()=>{
+  const name=(document.querySelector('#un')||{}).value.trim();
+  const email=(document.querySelector('#em')||{}).value.trim();
+  const pw=(document.querySelector('#pw')||{}).value||'';
+  if(!name){toast('Enter a name to create an account','✏️');return;}
+  if(!email||pw.length<6){toast('Email + password (6+ chars) required','✏️');return;}
+  if(!window.__API_URL__){toast('Set the backend first (tap 🔧)','🔧');return;}
+  try{
+    // Create the account on the backend, then connect with it.
+    const a=await apiReq('/auth/register',{method:'POST',auth:false,
+      body:{email,username:name,password:pw}});
+    JWT=a.access_token; LIVE=true;
+    // Load any sweepstakes this new user can see (likely none yet — that's fine).
+    try{
+      const list=await apiReq('/sweepstakes');
+      if(list&&list.length){const s=list[0];
+        Object.assign(sweep,{name:s.name,tour:s.tournament_name,fee:s.entry_fee,
+          cur:{EUR:'€',GBP:'£',USD:'$'}[s.currency]||'€',code:s.invite_code});
+        startLive(s.id); await refreshLive();}
+    }catch{}
+    auth=true;view='home';render();
+    setTimeout(()=>toast('Account created · you are LIVE','🎉'),300);
+  }catch(e){
+    const msg=e.message||'';
+    if(/already registered|exists|409/i.test(msg)){
+      toast('Email exists — signing you in instead','↪️');
+      await window.doLogin();
+    }else{
+      toast('Could not create account: '+msg,'⚠️');
+    }
+  }
 };
 window.showDiag=async()=>{
   const url=window.__API_URL__;

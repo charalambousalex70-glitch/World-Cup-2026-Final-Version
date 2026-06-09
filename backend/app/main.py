@@ -27,17 +27,21 @@ async def lifespan(app: FastAPI):
     # (no manual Shell step). Safe to run every boot: it no-ops if data exists.
     if settings.AUTO_SEED:
         try:
-            from app.models import Sweepstake
+            from app.models import User
             from app.seed import seed
             async with AsyncSessionLocal() as db:
-                exists = (
-                    await db.execute(select(Sweepstake.id).limit(1))
+                # Check specifically for the demo user, not just any data, so a
+                # half-populated DB still gets the demo login created.
+                demo = (
+                    await db.execute(
+                        select(User.id).where(User.email == "you@example.com")
+                    )
                 ).scalar_one_or_none()
-            if not exists:
-                log.info("Empty database — running demo seed.")
+            if not demo:
+                log.info("Demo user missing — running demo seed.")
                 await seed()
             else:
-                log.info("Data present — skipping seed.")
+                log.info("Demo user present — skipping seed.")
         except Exception:
             log.exception("Auto-seed skipped due to error (app still starts).")
 
