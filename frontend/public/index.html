@@ -261,12 +261,14 @@ let auth=false, view='home';
 
 function render(){
   if(!auth){renderAuth();return;}
-  // The "My Leagues" landing and Profile have their own minimal chrome.
   const inLeague = HAS_SWEEPSTAKE && CUR_SWEEP;
+  const onProfile = view==='profile';
+  // Show the league tab bar only when inside a league AND not on the profile.
+  const showTabs = inLeague && !onProfile;
   app.innerHTML=`
-    ${topBar(inLeague)}
+    ${topBar(inLeague, onProfile)}
     <div class="scroll" id="scroll"></div>
-    ${inLeague?tabBar():''}
+    ${showTabs?tabBar():''}
   `;
   const s=$('#scroll');
   const views={leagues:vLeagues,profile:vProfile,
@@ -275,8 +277,24 @@ function render(){
   let v=view;
   if(!inLeague && !['leagues','profile'].includes(v)) v='leagues';
   (views[v]||vLeagues)(s);
-  if(inLeague) bindTabs();
+  if(showTabs) bindTabs();
 }
+
+/* Remember where the user was before opening the profile, so the back button
+   returns them there instead of forcing a re-navigation. */
+let PREV_VIEW='home';
+window.openProfile=()=>{ if(view!=='profile')PREV_VIEW=view; view='profile'; render(); };
+window.closeProfile=()=>{
+  // Back to the previous in-league view, or to My Leagues if not in one.
+  view=(HAS_SWEEPSTAKE&&CUR_SWEEP)?(PREV_VIEW==='profile'?'home':PREV_VIEW):'leagues';
+  render();
+};
+/* The logo always takes you "home": league home if in one, else My Leagues. */
+window.goHome=()=>{
+  if(HAS_SWEEPSTAKE&&CUR_SWEEP){view='home';}
+  else{view='leagues';}
+  render();
+};
 
 /* ---------------- AUTH ---------------- */
 function renderAuth(){
@@ -333,18 +351,29 @@ function prewarmBackend(){
 }
 
 /* ---------------- TOP / TABS ---------------- */
-function topBar(inLeague){
+function topBar(inLeague, onProfile){
   const badge = LIVE
     ? `<div class="live"><span class="dot"></span>LIVE</div>`
     : `<div class="live" style="background:rgba(255,200,61,.12);color:var(--gold);border-color:rgba(255,200,61,.3);cursor:pointer" onclick="showDiag()"><span class="dot" style="background:var(--gold)"></span>DEMO</div>`;
+
+  // Profile screen: show a back arrow + "Profile" title, and the logo.
+  if(onProfile){
+    return `<div class="top">
+      <div class="iconbtn" onclick="closeProfile()" title="Back" style="font-size:18px">‹</div>
+      <div class="logo" style="cursor:pointer" onclick="goHome()"><div class="ball"></div>SWEEP<span class="gold">STAKE</span></div>
+      ${badge}
+      <div class="iconbtn" onclick="toggleTheme()">${dark?'☀️':'🌙'}</div>
+    </div>`;
+  }
+
   const left = inLeague
     ? `<div class="iconbtn" onclick="goToMyLeagues()" title="My leagues" style="font-size:18px">‹</div>
-       <div class="logo" style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px">${(CUR_SWEEP&&CUR_SWEEP.name)||'League'}</div>`
-    : `<div class="logo"><div class="ball"></div>SWEEP<span class="gold">STAKE</span></div>`;
+       <div class="logo" style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;cursor:pointer" onclick="goHome()">${(CUR_SWEEP&&CUR_SWEEP.name)||'League'}</div>`
+    : `<div class="logo" style="cursor:pointer" onclick="goHome()"><div class="ball"></div>SWEEP<span class="gold">STAKE</span></div>`;
   return `<div class="top">
     ${left}
     ${badge}
-    <div class="iconbtn" onclick="view='profile';render()" title="Profile">👤</div>
+    <div class="iconbtn" onclick="openProfile()" title="Profile">👤</div>
     <div class="iconbtn" onclick="toggleTheme()">${dark?'☀️':'🌙'}</div>
   </div>`;
 }
@@ -628,7 +657,10 @@ function vDraw(s){
       <div style="font-size:40px;margin-bottom:10px">✅</div>
       <h2 style="font-size:22px">Draw Complete</h2>
       <p class="mut" style="font-size:14px;max-width:300px;margin:8px auto 16px">Teams have been assigned and locked in. Check the Board to see who got who.</p>
-      <button class="btn gold" style="max-width:260px;margin:0 auto" onclick="view='board';render()">View Leaderboard</button></div>`;
+      <button class="btn gold" style="max-width:260px;margin:0 auto" onclick="view='board';render()">View Leaderboard</button>
+      ${isAdmin?`<button class="btn ghost" style="max-width:260px;margin:12px auto 0;color:var(--red)" onclick="resetDrawLive()">↩️ Cancel & Redo Draw</button>
+      <p class="mut" style="font-size:12px;max-width:300px;margin:10px auto 0">Redoing clears the current teams and reopens the league so new members can join before a fresh draw.</p>`:''}
+      </div>`;
     return;
   }
   if(LIVE && !isAdmin){
@@ -734,6 +766,26 @@ window.approveDraw=async()=>{
   // demo
   alloc=players.map(p=>{const d=drawn.find(x=>x.player.id===p.id);return teams.indexOf(d.team)});
   toast('Draw approved & saved','✅');view='board';render();
+};
+window.resetDrawLive=()=>{
+  modal(`<h2 style="font-size:20px;margin-bottom:8px">Cancel & Redo Draw?</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:16px;line-height:1.5">This clears everyone's current teams and reopens the league so new members can join. You'll then run a fresh draw. This can't be undone.</p>
+    <button class="btn gold" id="resetbtn" style="color:var(--red)" onclick="doResetDraw()">Yes, redo the draw</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Keep current draw</button>`);
+};
+window.doResetDraw=async()=>{
+  const btn=$('#resetbtn'); if(btn){btn.textContent='Resetting…';btn.style.opacity=.6;}
+  try{
+    await apiReq(`/sweepstakes/${CUR_SWEEP.id}/draw/reset`,{method:'POST'});
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    drawn=[]; drawResult=null; EXCLUDED=new Set();
+    await refreshSweepstake();
+    view='draw'; render();
+    toast('Draw reset — you can run it again','↩️');
+  }catch(e){
+    if(btn){btn.textContent='Yes, redo the draw';btn.style.opacity=1;}
+    toast('Could not reset: '+(e.message||'error'),'⚠️');
+  }
 };
 
 /* ---------------- FIXTURES ---------------- */
@@ -950,7 +1002,7 @@ window.saveName=async()=>{
 window.doLogout=()=>{
   if(wsClose)wsClose();
   // Reset all session state so the next user starts clean.
-  auth=false; LIVE=false; JWT=null; MY_NAME=null; MY_ID=null;
+  auth=false; LIVE=false; JWT=null; setJWT(null); MY_NAME=null; MY_ID=null;
   CUR_SWEEP=null; HAS_SWEEPSTAKE=false; MY_LEAGUES=[];
   clearDemoData(); drawn=[]; drawResult=null; EXCLUDED=new Set();
   view='home';
@@ -1072,8 +1124,16 @@ function resolveApiUrl(){
   return (saved||DEFAULT_API).replace(/\/+$/,''); // strip trailing slash
 }
 window.__API_URL__ = resolveApiUrl();
-let LIVE=false, JWT=null, SID=null, wsClose=null, LAST_ERR='';
+// Restore the saved login token so a refresh doesn't log the user out.
+let JWT=null; try{JWT=localStorage.getItem('ssl_jwt')||null}catch{}
+let LIVE=false, SID=null, wsClose=null, LAST_ERR='';
 const API=()=>`${window.__API_URL__}/api/v1`;
+
+/* Persist (or clear) the auth token so sessions survive a page refresh. */
+function setJWT(token){
+  JWT=token||null;
+  try{ token?localStorage.setItem('ssl_jwt',token):localStorage.removeItem('ssl_jwt'); }catch{}
+}
 
 window.setApiUrl=(u)=>{
   u=(u||'').trim().replace(/\/+$/,'');
@@ -1169,7 +1229,7 @@ function startLive(sid){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
       }
-      else if(['draw_approved','draw_completed'].includes(m.event)){refreshSweepstake();}
+      else if(['draw_approved','draw_completed','draw_reset'].includes(m.event)){refreshSweepstake();}
       else if(m.event==='fixtures_updated'){
         loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());});
       }
@@ -1274,7 +1334,7 @@ window.doLogin=async()=>{
   setAuthBusy(true,'Sign In');
   try{
     const a=await apiReq('/auth/login',{method:'POST',auth:false,body:{email,password:pw}});
-    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||null; MY_ID=(a.user&&a.user.id)||null;
+    JWT=a.access_token; setJWT(a.access_token); LIVE=true; MY_NAME=(a.user&&a.user.username)||null; MY_ID=(a.user&&a.user.id)||null;
     await loadMyLeagues();
     auth=true;view='leagues';render();
     setTimeout(()=>toast('Welcome back!','👋'),300);
@@ -1299,7 +1359,7 @@ window.doRegister=async()=>{
   try{
     const a=await apiReq('/auth/register',{method:'POST',auth:false,
       body:{email,username:name,password:pw}});
-    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||name; MY_ID=(a.user&&a.user.id)||null;
+    JWT=a.access_token; setJWT(a.access_token); LIVE=true; MY_NAME=(a.user&&a.user.username)||name; MY_ID=(a.user&&a.user.id)||null;
     await loadMyLeagues();              // new account = empty league list
     auth=true;view='leagues';render();
     setTimeout(()=>toast('Account created — welcome! 🎉','✅'),300);
@@ -1347,5 +1407,23 @@ try{
   if(j)PENDING_JOIN=j.trim().toUpperCase();
 }catch{}
 
-render();
+/* On load, if we have a saved token, validate it and restore the session so a
+   refresh keeps the user logged in. Otherwise show the sign-in screen. */
+async function boot(){
+  if(JWT){
+    try{
+      const u=await apiReq('/auth/me',{auth:true});
+      MY_NAME=(u&&u.username)||null; MY_ID=(u&&u.id)||null; LIVE=true; auth=true;
+      await loadMyLeagues();
+      view='leagues';
+      render();
+      return;
+    }catch(e){
+      // Token invalid/expired (or server unreachable) — fall back to sign-in.
+      setJWT(null);
+    }
+  }
+  render();
+}
+boot();
 </script>

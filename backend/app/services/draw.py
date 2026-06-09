@@ -104,6 +104,20 @@ async def approve_draw(db: AsyncSession, sweepstake: Sweepstake) -> None:
     await db.flush()
 
 
+async def reset_draw(db: AsyncSession, sweepstake: Sweepstake) -> None:
+    """Undo a draw so the admin can re-run it (e.g. after more people join).
+
+    Clears allocations and the generated team set, un-approves the draw, and
+    returns the sweepstake to the 'open' state so new members can still join
+    and a fresh draw reflects everyone.
+    """
+    await db.execute(delete(Allocation).where(Allocation.sweepstake_id == sweepstake.id))
+    await db.execute(delete(Team).where(Team.sweepstake_id == sweepstake.id))
+    sweepstake.draw_approved = False
+    sweepstake.status = "open"
+    await db.flush()
+
+
 def _secure_shuffle(items: list) -> None:
     """In-place Fisher–Yates using a CSPRNG."""
     for i in range(len(items) - 1, 0, -1):

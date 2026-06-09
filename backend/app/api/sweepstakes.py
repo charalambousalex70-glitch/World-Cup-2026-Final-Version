@@ -18,7 +18,7 @@ from app.schemas import (
     PaymentUpdate, SweepstakeCreate, SweepstakeOut,
 )
 from app.services import football
-from app.services.draw import DrawError, approve_draw, run_draw
+from app.services.draw import DrawError, approve_draw, reset_draw, run_draw
 from app.services.scoring import compute_leaderboard
 from app.websocket.manager import manager
 from app.models import Fixture
@@ -228,6 +228,20 @@ async def approve(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         raise HTTPException(409, str(e))
     full = await _load_full(db, sid)
     await manager.broadcast(str(sid), "draw_approved", {})
+    return SweepstakeOut.model_validate(full)
+
+
+@router.post("/{sid}/draw/reset", response_model=SweepstakeOut)
+async def reset(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                user: User = Depends(get_current_user)):
+    """Undo the draw so the admin can re-run it (after more people join, etc.)."""
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+    await reset_draw(db, sweep)
+    full = await _load_full(db, sid)
+    await manager.broadcast(str(sid), "draw_reset", {})
     return SweepstakeOut.model_validate(full)
 
 
