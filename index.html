@@ -354,7 +354,28 @@ function vHome(s){
   const hasTeam = meIdx>=0 && alloc[meIdx]!=null && teams[alloc[meIdx]];
   const meTeam = hasTeam ? T(alloc[meIdx]) : null;
   const myStage = hasTeam ? stages[meIdx] : null;
-  const prog=62;
+
+  // ---- Real stats derived from the players' teams + live fixtures ----
+  const drawDone = alloc.length>0 && teams.length>0;
+  // Teams alive = players whose team has NOT been eliminated ("Out").
+  // Before the draw, everyone's still "in", so it equals the player count.
+  const teamsAlive = drawDone
+    ? players.reduce((n,_,i)=> n + (stages[i]!=='Out' ? 1 : 0), 0)
+    : players.length;
+  const totalTeams = players.length; // started with N teams (one per player)
+  // Matches played = finished + live fixtures from the backend.
+  const matchesPlayed = Array.isArray(LIVE_FIXTURES)
+    ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED'||x.status==='LIVE').length : 0;
+  // Tournament progress = furthest stage reached across all alive teams.
+  const stageOrder=['Group','R16','QF','SF','Final','Winner'];
+  const stagePct={Group:10,R16:30,QF:50,SF:70,Final:90,Winner:100,Out:0};
+  let furthest='Group';
+  if(drawDone){
+    stages.forEach(st=>{ if(st&&st!=='Out'&&stageOrder.indexOf(st)>stageOrder.indexOf(furthest))furthest=st; });
+  }
+  const prog = drawDone ? (stagePct[furthest]||0) : 0;
+  const stageLabels=['Groups','R16','QF','SF','Final'];
+  const curStageLabelIdx=Math.min(stageOrder.indexOf(furthest),4);
 
   // "Your Team" card: show real team if drawn, else a friendly pre-draw card.
   const teamCard = meTeam
@@ -398,24 +419,55 @@ function vHome(s){
     <div class="card">
       <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700">${prog}%</span></div>
       <div class="bar"><i style="width:${prog}%"></i></div>
-      <div class="between mut" style="font-size:11px;margin-top:8px"><span>Groups</span><span>R16</span><span class="gold">QF</span><span>SF</span><span>Final</span></div>
+      <div class="between mut" style="font-size:11px;margin-top:8px">${stageLabels.map((l,i)=>`<span class="${i===curStageLabelIdx&&drawDone?'gold':''}">${l}</span>`).join('')}</div>
     </div>
 
     <div class="grid2">
-      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--grn)">7</div><div class="label" style="margin-top:2px">Teams Alive</div></div>
-      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--blu)">14</div><div class="label" style="margin-top:2px">Matches Played</div></div>
+      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--grn)">${teamsAlive}${totalTeams?`<span class="mut" style="font-size:15px">/${totalTeams}</span>`:''}</div><div class="label" style="margin-top:2px">Teams Alive</div></div>
+      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--blu)">${matchesPlayed}</div><div class="label" style="margin-top:2px">Matches Played</div></div>
     </div>
 
     <div class="between"><div class="label">Top Standings</div><span class="gold" style="font-size:13px;font-weight:700;cursor:pointer" onclick="view='board';render()">View all →</span></div>
-    ${r.slice(0,3).map((x,i)=>lbRow(x,i)).join('')}
+    ${r.length?r.slice(0,3).map((x,i)=>lbRow(x,i)).join('')
+      :'<div class="card mut" style="text-align:center;font-size:13px">No standings yet — run the draw to assign teams.</div>'}
 
     <div class="between" style="margin-top:4px"><div class="label">Recent Activity</div></div>
-    ${notifs.slice(0,2).map(n=>`<div class="notif"><div class="ni" style="background:${n.c}1f;color:${n.c}">${n.i}</div>
-      <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.t}</div><div class="mut" style="font-size:12px">${n.s}</div></div>
-      <div class="mut" style="font-size:11px">${n.ago}</div></div>`).join('')}
+    ${activityHTML()}
 
     <button class="btn gold" onclick="openInvite()">＋ Invite Friends</button>
   </div>`;
+}
+
+/* Recent activity: real notifications from the backend if present, otherwise a
+   friendly placeholder. Populated by loadActivity() / WebSocket events. */
+let LIVE_ACTIVITY=null;
+function activityHTML(){
+  if(LIVE && Array.isArray(LIVE_ACTIVITY)){
+    if(!LIVE_ACTIVITY.length)
+      return '<div class="card mut" style="text-align:center;font-size:13px">No activity yet. Updates appear here when teams play, advance, or get knocked out.</div>';
+    return LIVE_ACTIVITY.slice(0,5).map(n=>`<div class="notif">
+      <div class="ni" style="background:#4d8dff1f;color:#4d8dff">${n.icon||'⚽'}</div>
+      <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.title||''}</div>
+        <div class="mut" style="font-size:12px">${n.body||''}</div></div>
+      <div class="mut" style="font-size:11px">${timeAgo(n.created_at)}</div></div>`).join('');
+  }
+  // Demo fallback (only when not connected to a live backend).
+  return notifs.slice(0,2).map(n=>`<div class="notif"><div class="ni" style="background:${n.c}1f;color:${n.c}">${n.i}</div>
+    <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.t}</div><div class="mut" style="font-size:12px">${n.s}</div></div>
+    <div class="mut" style="font-size:11px">${n.ago}</div></div>`).join('');
+}
+function timeAgo(iso){
+  if(!iso)return '';
+  const d=new Date(iso), diff=(Date.now()-d.getTime())/1000;
+  if(diff<60)return 'now';
+  if(diff<3600)return Math.floor(diff/60)+'m';
+  if(diff<86400)return Math.floor(diff/3600)+'h';
+  return Math.floor(diff/86400)+'d';
+}
+async function loadActivity(){
+  if(!LIVE||!CUR_SWEEP)return;
+  try{LIVE_ACTIVITY=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/notifications`)||[];}
+  catch(e){console.warn('activity load failed',e);LIVE_ACTIVITY=[];}
 }
 
 /* ---------------- LEADERBOARD ---------------- */
@@ -798,13 +850,15 @@ function startLive(sid){
   const open=()=>{
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
-      if(m.event==='leaderboard_updated'&&m.data.leaderboard){applyLeaderboard(m.data.leaderboard);render()}
+      if(m.event==='leaderboard_updated'&&m.data.leaderboard){applyLeaderboard(m.data.leaderboard);loadActivity().then(()=>render());render()}
       else if(m.event==='participant_joined'){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
       }
       else if(['draw_approved','draw_completed'].includes(m.event)){refreshSweepstake();}
-      else if(m.event==='fixtures_updated'){refreshLive();}
+      else if(m.event==='fixtures_updated'){
+        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());});
+      }
     }catch{}};
     ws.onclose=()=>{if(alive)setTimeout(open,1500)};
     ws.onopen=()=>{setInterval(()=>{if(ws.readyState===1)ws.send('ping')},25000)};
@@ -853,6 +907,8 @@ async function loadMySweepstakes(){
     HAS_SWEEPSTAKE=true;
     startLive(s.id);
     await refreshLive();   // pulls leaderboard (teams/stages) if a draw exists
+    await loadFixtures();  // matches played + fixtures view
+    await loadActivity();  // recent activity feed
   }
   return HAS_SWEEPSTAKE;
 }
@@ -864,6 +920,8 @@ async function refreshSweepstake(){
     const s=await apiReq(`/sweepstakes/${CUR_SWEEP.id}`);
     applySweepstake(s);
     await refreshLive();
+    await loadFixtures();
+    await loadActivity();
     render();
   }catch(e){console.warn('refreshSweepstake failed',e)}
 }
