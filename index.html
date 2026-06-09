@@ -206,7 +206,7 @@ const sweep={name:'Office World Cup',tour:'World Cup 2026',fee:20,cur:'€',code
 const prizeSplit=[60,25,15];
 
 /* ---------------- HELPERS ---------------- */
-const T=i=>teams[i];
+const T=i=>teams[i]||{n:'TBD',e:'⏳',c:'#888'};  // safe fallback before the draw
 const pool=()=>players.length*sweep.fee;
 function ranked(){
   return players.map((p,i)=>({p,ti:alloc[i],stage:stages[i],pts:stagePts[stages[i]],idx:i}))
@@ -333,9 +333,36 @@ function vHome(s){
     </div>`;
     return;
   }
-  const r=ranked(), me=r.findIndex(x=>x.p.name==='You')+1;
-  const meTeam=T(alloc[players.findIndex(p=>p.name==='You')]);
+  const r=ranked(), myName=MY_NAME||'You', meIdx=players.findIndex(p=>p.name===myName);
+  const me=r.findIndex(x=>x.p.name===myName)+1;
+  // A team is only "mine" if I'm a player AND a team has actually been allocated.
+  const hasTeam = meIdx>=0 && alloc[meIdx]!=null && teams[alloc[meIdx]];
+  const meTeam = hasTeam ? T(alloc[meIdx]) : null;
+  const myStage = hasTeam ? stages[meIdx] : null;
   const prog=62;
+
+  // "Your Team" card: show real team if drawn, else a friendly pre-draw card.
+  const teamCard = meTeam
+    ? `<div class="card glow">
+        <div class="between" style="margin-bottom:6px">
+          <div class="label">Your Team</div>
+          <span class="tag ${myStage==='Out'?'out':(myStage==='Winner'?'win':'live')}">${myStage||'—'}</span>
+        </div>
+        <div class="row">
+          <div class="flag" style="font-size:26px">${meTeam.e}</div>
+          <div style="flex:1"><div style="font-size:19px;font-weight:700">${meTeam.n}</div>
+            <div class="mut" style="font-size:13px">You're currently <b class="gold">#${me}</b> of ${players.length}</div></div>
+          <div style="text-align:right"><div class="mono gold" style="font-size:26px;font-weight:700">#${me}</div></div>
+        </div>
+      </div>`
+    : `<div class="card glow" style="text-align:center">
+        <div class="label" style="margin-bottom:8px">Your Team</div>
+        <div style="font-size:34px;margin-bottom:6px">🎲</div>
+        <div style="font-weight:700;font-size:16px">No team yet</div>
+        <p class="mut" style="font-size:13px;margin:6px 0 12px">Teams are assigned in the draw. Once everyone's joined, run the draw to get yours.</p>
+        <button class="btn gold" style="max-width:260px;margin:0 auto" onclick="view='draw';render()">🎲 Go to the Draw</button>
+      </div>`;
+
   s.innerHTML=`<div class="stagger" style="display:flex;flex-direction:column;gap:14px;padding-top:4px">
     <div class="between"><div><div class="label">${sweep.tour}</div>
       <h2 style="font-size:24px;margin-top:2px">${sweep.name}</h2></div>
@@ -345,24 +372,13 @@ function vHome(s){
       <div class="label" style="color:#cdd6ee">Total Prize Pool</div>
       <div class="pool">${sweep.cur}${pool().toLocaleString()}</div>
       <div class="row" style="gap:8px;flex-wrap:wrap">
-        <span class="chip">🥇 1st · ${sweep.cur}${pool()*prizeSplit[0]/100}</span>
-        <span class="chip">🥈 2nd · ${sweep.cur}${pool()*prizeSplit[1]/100}</span>
-        <span class="chip">🥉 3rd · ${sweep.cur}${pool()*prizeSplit[2]/100}</span>
+        <span class="chip">🥇 1st · ${sweep.cur}${(pool()*prizeSplit[0]/100).toLocaleString()}</span>
+        ${prizeSplit[1]?`<span class="chip">🥈 2nd · ${sweep.cur}${(pool()*prizeSplit[1]/100).toLocaleString()}</span>`:''}
+        ${prizeSplit[2]?`<span class="chip">🥉 3rd · ${sweep.cur}${(pool()*prizeSplit[2]/100).toLocaleString()}</span>`:''}
       </div>
     </div>
 
-    <div class="card glow">
-      <div class="between" style="margin-bottom:6px">
-        <div class="label">Your Team</div>
-        <span class="tag ${meTeam.n==='Brazil'?'win':'live'}">${stages[players.findIndex(p=>p.name==='You')]}</span>
-      </div>
-      <div class="row">
-        <div class="flag" style="font-size:26px">${meTeam.e}</div>
-        <div style="flex:1"><div style="font-size:19px;font-weight:700">${meTeam.n}</div>
-          <div class="mut" style="font-size:13px">You're currently <b class="gold">#${me}</b> of ${players.length}</div></div>
-        <div style="text-align:right"><div class="mono gold" style="font-size:26px;font-weight:700">#${me}</div></div>
-      </div>
-    </div>
+    ${teamCard}
 
     <div class="card">
       <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700">${prog}%</span></div>
@@ -389,7 +405,7 @@ function vHome(s){
 
 /* ---------------- LEADERBOARD ---------------- */
 function lbRow(x,i){
-  const t=T(x.ti), me=x.p.name==='You';
+  const t=T(x.ti), me=x.p.name===(MY_NAME||'You');
   const tag = x.stage==='Out'?'<span class="tag out">OUT</span>'
     : x.stage==='Winner'?'<span class="tag win">WINNER</span>'
     : `<span class="tag live">${x.stage}</span>`;
@@ -745,6 +761,7 @@ function startLive(sid){
   open(); wsClose=()=>{alive=false;if(ws)ws.close()};
 }
 let HAS_SWEEPSTAKE=false; // true once the signed-in user has at least one
+let MY_NAME=null;         // the logged-in user's username (to mark "you")
 
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
@@ -761,6 +778,11 @@ async function loadMySweepstakes(){
     const s=list[0];
     Object.assign(sweep,{name:s.name,tour:s.tournament_name,fee:s.entry_fee,
       cur:{EUR:'€',GBP:'£',USD:'$'}[s.currency]||'€',code:s.invite_code});
+    // Use the REAL prize split from the backend, not the demo default.
+    if(s.prize_tiers&&s.prize_tiers.length){
+      prizeSplit.length=0;
+      s.prize_tiers.sort((a,b)=>a.rank-b.rank).forEach(t=>prizeSplit.push(t.percentage));
+    }
     HAS_SWEEPSTAKE=true;
     startLive(s.id); await refreshLive();
   }
@@ -789,7 +811,7 @@ window.doLogin=async()=>{
   setAuthBusy(true,'Sign In');
   try{
     const a=await apiReq('/auth/login',{method:'POST',auth:false,body:{email,password:pw}});
-    JWT=a.access_token; LIVE=true;
+    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||null;
     await loadMySweepstakes();
     auth=true;view='home';render();
     setTimeout(()=>toast('Welcome back!','👋'),300);
@@ -814,7 +836,7 @@ window.doRegister=async()=>{
   try{
     const a=await apiReq('/auth/register',{method:'POST',auth:false,
       body:{email,username:name,password:pw}});
-    JWT=a.access_token; LIVE=true;
+    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||name;
     await loadMySweepstakes();          // new account = clean slate
     auth=true;view='home';render();
     setTimeout(()=>toast('Account created — welcome! 🎉','✅'),300);
