@@ -220,6 +220,21 @@ const FIXTURE_FLAGS={
 };
 window.FIXTURE_FLAGS=FIXTURE_FLAGS;
 
+/* Ranked contender pool (top of list = most likely to win). The Teams tab uses
+   the top-N for the draw. Mirrors the backend's RANKED_TEAMS. */
+const RANKED_POOL=[
+ ['Spain','🇪🇸'],['France','🇫🇷'],['England','🏴󠁧󠁢󠁥󠁮󠁧󠁿'],['Brazil','🇧🇷'],['Portugal','🇵🇹'],['Argentina','🇦🇷'],
+ ['Germany','🇩🇪'],['Netherlands','🇳🇱'],['Belgium','🇧🇪'],['Norway','🇳🇴'],['Japan','🇯🇵'],['Colombia','🇨🇴'],
+ ['USA','🇺🇸'],['Mexico','🇲🇽'],['Uruguay','🇺🇾'],['Morocco','🇲🇦'],['Switzerland','🇨🇭'],['Croatia','🇭🇷'],
+ ['Türkiye','🇹🇷'],['Ecuador','🇪🇨'],['Senegal','🇸🇳'],['Paraguay','🇵🇾'],['Canada','🇨🇦'],['Austria','🇦🇹'],
+ ['Sweden','🇸🇪'],['Ivory Coast','🇨🇮'],['Algeria','🇩🇿'],['Scotland','🏴󠁧󠁢󠁳󠁣󠁴󠁿'],['Australia','🇦🇺'],['Cape Verde','🇨🇻'],
+ ['Curacao','🇨🇼'],['DR Congo','🇨🇩'],['Haiti','🇭🇹'],['Iran','🇮🇷'],['Iraq','🇮🇶'],['Jordan','🇯🇴'],
+ ['New Zealand','🇳🇿'],['Panama','🇵🇦'],['Qatar','🇶🇦'],['Saudi Arabia','🇸🇦'],['South Africa','🇿🇦'],['Tunisia','🇹🇳'],
+ ['Uzbekistan','🇺🇿'],['Ghana','🇬🇭'],['Czechia','🇨🇿'],['Bosnia & Herzegovina','🇧🇦'],['South Korea','🇰🇷'],['Egypt','🇪🇬']
+].map(([name,flag])=>({name,flag}));
+window.RANKED_POOL=RANKED_POOL;
+let MY_ID=null;  // logged-in user's id (to detect league admin)
+
 /* ---------------- HELPERS ---------------- */
 const T=i=>teams[i]||{n:'TBD',e:'⏳',c:'#888'};  // safe fallback before the draw
 const pool=()=>players.length*sweep.fee;
@@ -246,14 +261,21 @@ let auth=false, view='home';
 
 function render(){
   if(!auth){renderAuth();return;}
+  // The "My Leagues" landing and Profile have their own minimal chrome.
+  const inLeague = HAS_SWEEPSTAKE && CUR_SWEEP;
   app.innerHTML=`
-    ${topBar()}
+    ${topBar(inLeague)}
     <div class="scroll" id="scroll"></div>
-    ${tabBar()}
+    ${inLeague?tabBar():''}
   `;
   const s=$('#scroll');
-  ({home:vHome,board:vBoard,draw:vDraw,fixtures:vFixtures,admin:vAdmin,profile:vProfile}[view]||vHome)(s);
-  bindTabs();
+  const views={leagues:vLeagues,profile:vProfile,
+               home:vHome,board:vBoard,draw:vDraw,fixtures:vFixtures,admin:vAdmin,teams:vTeams};
+  // If no league is open, force the leagues landing (except profile).
+  let v=view;
+  if(!inLeague && !['leagues','profile'].includes(v)) v='leagues';
+  (views[v]||vLeagues)(s);
+  if(inLeague) bindTabs();
 }
 
 /* ---------------- AUTH ---------------- */
@@ -307,14 +329,18 @@ function prewarmBackend(){
 window.doLogin=()=>{auth=true;view='home';render();setTimeout(()=>toast('Welcome back!','👋'),300)};
 
 /* ---------------- TOP / TABS ---------------- */
-function topBar(){
+function topBar(inLeague){
   const badge = LIVE
     ? `<div class="live"><span class="dot"></span>LIVE</div>`
     : `<div class="live" style="background:rgba(255,200,61,.12);color:var(--gold);border-color:rgba(255,200,61,.3);cursor:pointer" onclick="showDiag()"><span class="dot" style="background:var(--gold)"></span>DEMO</div>`;
+  const left = inLeague
+    ? `<div class="iconbtn" onclick="goToMyLeagues()" title="My leagues" style="font-size:18px">‹</div>
+       <div class="logo" style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px">${(CUR_SWEEP&&CUR_SWEEP.name)||'League'}</div>`
+    : `<div class="logo"><div class="ball"></div>SWEEP<span class="gold">STAKE</span></div>`;
   return `<div class="top">
-    <div class="logo"><div class="ball"></div>SWEEP<span class="gold">STAKE</span></div>
+    ${left}
     ${badge}
-    <div class="iconbtn" onclick="showDiag()" title="Backend settings">🔧</div>
+    <div class="iconbtn" onclick="view='profile';render()" title="Profile">👤</div>
     <div class="iconbtn" onclick="toggleTheme()">${dark?'☀️':'🌙'}</div>
   </div>`;
 }
@@ -325,15 +351,90 @@ function tabBar(){
    home:'<path d="M3 11l9-8 9 8M5 10v10h14V10"/>',
    board:'<path d="M4 19V9M10 19V5M16 19v-7M20 19H2"/>',
    draw:'<circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/>',
+   teams:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
    fixtures:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
    admin:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.3 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5c.1-.3.1-.7.1-1z"/>'
   };
-  const tabs=[['home','Home'],['board','Board'],['draw','Draw'],['fixtures','Matches'],['admin','Admin']];
+  const tabs=[['home','Home'],['board','Board'],['draw','Draw'],['teams','Teams'],['fixtures','Matches'],['admin','Admin']];
   return `<div class="tabbar">${tabs.map(([k,l])=>`
     <div class="tab ${view===k?'on':''}" data-v="${k}">
       <svg viewBox="0 0 24 24">${ic[k]}</svg>${l}</div>`).join('')}</div>`;
 }
 function bindTabs(){document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{view=t.dataset.v;render()})}
+
+/* ---------------- MY LEAGUES (landing) ---------------- */
+function vLeagues(s){
+  const list=MY_LEAGUES||[];
+  s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+    <div class="between">
+      <div><div class="label">Signed in as</div>
+        <h2 style="font-size:24px;margin-top:2px">${MY_NAME||'You'}</h2></div>
+      <div class="avatar" style="background:var(--gold)">${(MY_NAME||'Y').slice(0,2).toUpperCase()}</div>
+    </div>
+    <div class="between"><div class="label">My Leagues</div><span class="mut" style="font-size:12px">${list.length} ${list.length===1?'league':'leagues'}</span></div>
+    ${list.length? list.map(l=>leagueCard(l)).join('')
+      : `<div class="card mut" style="text-align:center;font-size:14px;padding:26px 18px">
+           <div style="font-size:34px;margin-bottom:8px">🏆</div>
+           You haven't joined any leagues yet.<br>Create one or join with an invite code.
+         </div>`}
+    <button class="btn gold" onclick="openCreate()">＋ Create a League</button>
+    <button class="btn ghost" onclick="openJoin()">🔗 Join with Invite Code</button>
+  </div>`;
+}
+function leagueCard(l){
+  const n=(l.participants||[]).length;
+  const status={open:'Open · joining',drawn:'Draw done',active:'Live',finished:'Finished'}[l.status]||l.status||'';
+  const isAdmin = l.admin_id && MY_ID && l.admin_id===MY_ID;
+  return `<div class="card glow" style="cursor:pointer" onclick="openLeague('${l.id}')">
+    <div class="between">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.name}</div>
+        <div class="mut" style="font-size:12px;margin-top:2px">${l.tournament_name} · 👥 ${n}${isAdmin?' · 👑 you run this':''}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="tag ${l.status==='active'?'live':'live'}" style="margin-bottom:4px">${status}</div>
+        <div class="mut" style="font-size:18px">›</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------------- TEAMS IN THE DRAW ---------------- */
+function vTeams(s){
+  const isAdmin = CUR_SWEEP && CUR_SWEEP.admin_id && MY_ID && CUR_SWEEP.admin_id===MY_ID;
+  const drawDone = CUR_SWEEP && CUR_SWEEP.draw_approved;
+  const n=players.length;
+  // The teams that WILL be in the draw: top-N from the ranked pool, unless
+  // already drawn (then show the actual teams from the leaderboard data).
+  const pool = (window.RANKED_POOL||[]);
+  const inDraw = drawDone && teams.length
+    ? teams.map(t=>({name:t.n,flag:t.e}))
+    : pool.slice(0,Math.max(n,1)).filter(t=>!EXCLUDED.has(t.name));
+  s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
+    <h2 style="font-size:24px">Teams in the Draw</h2>
+    <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">
+      ${drawDone?'These teams were assigned in the draw.':`The top ${n} ranked teams (one per player) go into the draw. ${isAdmin?'You can exclude teams below — excluded ones are skipped and the next-ranked team takes their place.':'Only the league admin can change which teams are included.'}`}
+    </span></div>
+    <div class="between"><div class="label">In the draw (${inDraw.length})</div></div>
+    <div class="stagger">${inDraw.map(t=>teamRow(t,true,isAdmin&&!drawDone)).join('')||'<div class="card mut" style="text-align:center;font-size:13px">No teams yet — people need to join first.</div>'}</div>
+    ${(!drawDone&&isAdmin)?`
+      <div class="between" style="margin-top:6px"><div class="label">Excluded</div></div>
+      <div class="stagger">${[...EXCLUDED].map(name=>{const t=pool.find(x=>x.name===name)||{name,flag:'🏳️'};return teamRow({name:t.name,flag:t.flag},false,true);}).join('')||'<div class="card mut" style="text-align:center;font-size:12px">None excluded.</div>'}</div>
+    `:''}
+  </div>`;
+}
+function teamRow(t,included,canEdit){
+  return `<div class="lb" style="margin-bottom:0">
+    <div class="flag" style="font-size:20px">${t.flag||'🏳️'}</div>
+    <div style="flex:1;font-weight:600;font-size:15px">${t.name}</div>
+    ${canEdit?`<button class="btn ${included?'ghost':'gold'}" style="width:auto;padding:7px 14px;font-size:13px" onclick="toggleTeam('${t.name.replace(/'/g,"\\'")}')">${included?'Exclude':'Add back'}</button>`:''}
+  </div>`;
+}
+let EXCLUDED=new Set();
+window.toggleTeam=(name)=>{
+  if(EXCLUDED.has(name))EXCLUDED.delete(name);else EXCLUDED.add(name);
+  render();
+};
 
 /* ---------------- HOME / DASHBOARD ---------------- */
 function vHome(s){
@@ -400,8 +501,9 @@ function vHome(s){
       </div>`;
 
   s.innerHTML=`<div class="stagger" style="display:flex;flex-direction:column;gap:14px;padding-top:4px">
-    <div class="between"><div><div class="label">${sweep.tour}</div>
-      <h2 style="font-size:24px;margin-top:2px">${sweep.name}</h2></div>
+    <div class="between"><div>
+      <h2 style="font-size:26px;line-height:1">${sweep.tour||'World Cup 2026'}</h2>
+      <div class="mut" style="font-size:13px;margin-top:3px">${sweep.name}</div></div>
       <div class="chip">👥 ${players.length} players</div></div>
 
     <div class="hero">
@@ -513,24 +615,42 @@ function vBoard(s){
 /* ---------------- LIVE DRAW ---------------- */
 let drawn=[]; // {player,team}
 let drawing=false;
+let drawResult=null; // real allocations from backend (live mode)
 function vDraw(s){
+  const isAdmin = CUR_SWEEP && CUR_SWEEP.admin_id && MY_ID && CUR_SWEEP.admin_id===MY_ID;
+  const approved = CUR_SWEEP && CUR_SWEEP.draw_approved;
+  if(LIVE && approved){
+    s.innerHTML=`<div class="fade" style="padding-top:40px;text-align:center">
+      <div style="font-size:40px;margin-bottom:10px">✅</div>
+      <h2 style="font-size:22px">Draw Complete</h2>
+      <p class="mut" style="font-size:14px;max-width:300px;margin:8px auto 16px">Teams have been assigned and locked in. Check the Board to see who got who.</p>
+      <button class="btn gold" style="max-width:260px;margin:0 auto" onclick="view='board';render()">View Leaderboard</button></div>`;
+    return;
+  }
+  if(LIVE && !isAdmin){
+    s.innerHTML=`<div class="fade" style="padding-top:40px;text-align:center">
+      <div style="font-size:40px;margin-bottom:10px">🎲</div>
+      <h2 style="font-size:22px">Waiting for the Draw</h2>
+      <p class="mut" style="font-size:14px;max-width:300px;margin:8px auto 0">The league admin runs the draw once everyone's joined. You'll get your team automatically — sit tight!</p></div>`;
+    return;
+  }
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:14px;padding-top:4px">
     <h2 style="font-size:24px">Live Team Draw</h2>
-    <p class="mut" style="font-size:13px;margin-top:-6px">Animated lottery-style allocation. No duplicates · one team per player · admin-approved.</p>
+    <p class="mut" style="font-size:13px;margin-top:-6px">${LIVE?`Allocates the top ${players.length} ranked teams — one per player. Tap to draw each, then approve.`:'Animated lottery-style allocation. No duplicates · one team per player.'}</p>
     <div class="card glow draw-stage">
       <div class="reveal" id="wheel"><div class="inner"><div class="em" id="wem">🎰</div></div></div>
       <div id="drawlabel" style="text-align:center;min-height:44px">
         <div class="label">Ready to draw</div>
         <div style="font-size:18px;font-weight:700">${drawn.length}/${players.length} allocated</div>
       </div>
-      <button class="btn gold" id="drawbtn" onclick="doDraw()" style="max-width:240px">${drawn.length>=players.length?'✓ Draw Complete':'🎲 Draw Next Team'}</button>
+      <button class="btn gold" id="drawbtn" onclick="doDraw()" style="max-width:240px">${drawn.length>=players.length&&players.length>0?'✓ Draw Complete':'🎲 Draw Next Team'}</button>
       ${drawn.length>0&&drawn.length<players.length?'<button class="btn ghost" style="max-width:240px" onclick="resetDraw()">Reset</button>':''}
     </div>
     <div class="between"><div class="label">Allocations</div><span class="mut" style="font-size:12px">${drawn.length} of ${players.length}</span></div>
     <div id="drawlist" class="stagger" style="display:flex;flex-direction:column;gap:9px">
       ${drawn.map(d=>drawItem(d)).join('')||'<div class="card mut" style="text-align:center;font-size:13px">No teams drawn yet — tap “Draw Next Team”.</div>'}
     </div>
-    ${drawn.length>=players.length?'<button class="btn gold" onclick="approveDraw()">✓ Approve & Finalize Draw</button>':''}
+    ${drawn.length>=players.length&&players.length>0?`<button class="btn gold" onclick="approveDraw()">✓ Approve & Finalize Draw</button>`:''}
   </div>`;
 }
 function drawItem(d){
@@ -538,28 +658,78 @@ function drawItem(d){
     <div style="flex:1;font-weight:700;font-size:15px">${d.player.name}</div>
     <div class="row" style="gap:7px"><span style="font-size:20px">${d.team.e}</span><b>${d.team.n}</b></div></div>`;
 }
-window.resetDraw=()=>{drawn=[];render()};
-window.doDraw=()=>{
-  if(drawing||drawn.length>=players.length)return;
+window.resetDraw=()=>{drawn=[];drawResult=null;render()};
+
+window.doDraw=async()=>{
+  if(drawing)return;
+  if(players.length===0){toast('No one has joined yet','👥');return;}
+  // LIVE: fetch the real allocation from the backend on the first draw click.
+  if(LIVE && !drawResult){
+    drawing=true;
+    const btn=$('#drawbtn'); if(btn){btn.textContent='Drawing…';btn.style.opacity=.6;}
+    try{
+      // Send excluded teams so the backend skips them (admin choice).
+      const res=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/draw`,{method:'POST',
+        body:{excluded:[...EXCLUDED]}});
+      drawResult=(res||[]).map(a=>({
+        player:players.find(p=>p.id===a.participant_id)||{name:a.participant_name,av:a.participant_name.slice(0,2).toUpperCase(),col:'#888'},
+        team:{n:a.team_name,e:a.flag_emoji}
+      }));
+      drawing=false;
+      revealNext();
+    }catch(e){
+      drawing=false; const b=$('#drawbtn'); if(b){b.textContent='🎲 Draw Next Team';b.style.opacity=1;}
+      toast('Draw failed: '+(e.message||'error'),'⚠️');
+    }
+    return;
+  }
+  // Demo mode (or subsequent reveals in live mode).
+  if(LIVE && drawResult){ revealNext(); return; }
+  if(drawn.length>=players.length)return;
   drawing=true;
   const remainPlayers=players.filter(p=>!drawn.find(d=>d.player.id===p.id));
   const remainTeams=teams.filter(t=>!drawn.find(d=>d.team.n===t.n));
   const player=remainPlayers[0];
-  const team=remainTeams[Math.floor(Math.random()*remainTeams.length)];
+  const team=remainTeams[Math.floor(Math.random()*remainTeams.length)]||{n:'TBD',e:'⏳'};
+  animateReveal(player,team,()=>{drawn.push({player,team});drawing=false;render();});
+};
+
+/* Reveal the next pre-computed real allocation with the wheel animation. */
+function revealNext(){
+  if(drawing)return;
+  if(drawn.length>=drawResult.length){render();return;}
+  drawing=true;
+  const next=drawResult[drawn.length];
+  animateReveal(next.player,next.team,()=>{drawn.push(next);drawing=false;render();});
+}
+function animateReveal(player,team,done){
   const w=$('#wheel'),wem=$('#wem'),lbl=$('#drawlabel'),btn=$('#drawbtn');
-  w.classList.add('spin');btn.style.opacity=.5;btn.style.pointerEvents='none';
-  lbl.innerHTML=`<div class="label">Drawing for</div><div style="font-size:18px;font-weight:700">${player.name}…</div>`;
-  let t=0;const iv=setInterval(()=>{wem.textContent=teams[Math.floor(Math.random()*teams.length)].e;t++},80);
+  if(!w){done();return;}
+  w.classList.add('spin');if(btn){btn.style.opacity=.5;btn.style.pointerEvents='none';}
+  if(lbl)lbl.innerHTML=`<div class="label">Drawing for</div><div style="font-size:18px;font-weight:700">${player.name}…</div>`;
+  const flags=(window.RANKED_POOL||[{flag:'⚽'}]).map(t=>t.flag);
+  const iv=setInterval(()=>{wem.textContent=flags[Math.floor(Math.random()*flags.length)];},80);
   setTimeout(()=>{
     clearInterval(iv);w.classList.remove('spin');wem.textContent=team.e;
-    drawn.push({player,team});drawing=false;
     confetti();toast(`${player.name} drew ${team.n}!`,team.e);
-    render();
-  },1900);
-};
-window.approveDraw=()=>{
+    done();
+  },1700);
+}
+
+window.approveDraw=async()=>{
+  if(LIVE){
+    try{
+      await apiReq(`/sweepstakes/${CUR_SWEEP.id}/draw/approve`,{method:'POST'});
+      const s=await apiReq(`/sweepstakes/${CUR_SWEEP.id}`); applySweepstake(s);
+      await refreshLive();
+      toast('Draw approved & locked in','✅');
+      drawn=[];drawResult=null;view='board';render();
+    }catch(e){toast('Approve failed: '+(e.message||'error'),'⚠️');}
+    return;
+  }
+  // demo
   alloc=players.map(p=>{const d=drawn.find(x=>x.player.id===p.id);return teams.indexOf(d.team)});
-  toast('Draw approved & saved permanently','✅');view='board';render();
+  toast('Draw approved & saved','✅');view='board';render();
 };
 
 /* ---------------- FIXTURES ---------------- */
@@ -647,12 +817,28 @@ function vAdmin(s){
 
 /* ---------------- PROFILE ---------------- */
 function vProfile(s){
-  s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:13px;padding-top:4px;align-items:center">
-    <div class="avatar" style="width:84px;height:84px;font-size:30px;background:var(--gold)">YO</div>
-    <h2 style="font-size:24px">You</h2><span class="mut" style="margin-top:-8px">you@example.com</span>
-    <button class="btn ghost" onclick="auth=false;render()" style="margin-top:8px">Sign Out</button>
+  const initials=(MY_NAME||'You').slice(0,2).toUpperCase();
+  s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:13px;padding-top:16px;align-items:center">
+    <div class="avatar" style="width:84px;height:84px;font-size:30px;background:var(--gold)">${initials}</div>
+    <h2 style="font-size:24px">${MY_NAME||'You'}</h2>
+    <span class="mut" style="margin-top:-8px;font-size:13px">${LIVE?'Connected · live account':'Demo mode'}</span>
+    <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px;margin-top:10px">
+      <button class="btn gold" onclick="goToMyLeagues()">🏆 My Leagues</button>
+      <button class="btn ghost" onclick="showDiag()">🔧 Backend Settings</button>
+      <button class="btn ghost" onclick="doLogout()" style="color:var(--red)">Sign Out</button>
+    </div>
   </div>`;
 }
+window.doLogout=()=>{
+  if(wsClose)wsClose();
+  // Reset all session state so the next user starts clean.
+  auth=false; LIVE=false; JWT=null; MY_NAME=null; MY_ID=null;
+  CUR_SWEEP=null; HAS_SWEEPSTAKE=false; MY_LEAGUES=[];
+  clearDemoData(); drawn=[]; drawResult=null; EXCLUDED=new Set();
+  view='home';
+  render();
+  setTimeout(()=>toast('Signed out','👋'),200);
+};
 
 /* ---------------- MODALS ---------------- */
 function modal(html){
@@ -672,7 +858,7 @@ window.openInvite=()=>{
 window.openCreate=()=>{
   modal(`<h2 style="font-size:22px;margin-bottom:14px">Create Sweepstake</h2>
     <div style="display:flex;flex-direction:column;gap:12px">
-      <div><div class="label" style="margin-bottom:6px">Sweepstake name</div><input id="cn" placeholder="e.g. Office World Cup" value="Office World Cup"></div>
+      <div><div class="label" style="margin-bottom:6px">League name</div><input id="cn" placeholder="e.g. The Lads' World Cup" value=""></div>
       <div><div class="label" style="margin-bottom:6px">Tournament</div>
         <select id="ct"><option>World Cup 2026</option><option>Euro 2028</option><option>Champions League</option></select></div>
       <div class="grid2">
@@ -693,7 +879,8 @@ window.openCreate=()=>{
   $('#cf').oninput=upd;$('#cp').oninput=upd;
 };
 window.submitCreate=async()=>{
-  const name=($('#cn')||{}).value||'My Sweepstake';
+  const name=(($('#cn')||{}).value||'').trim();
+  if(!name){toast('Please enter a league name','✏️');return;}
   const tour=($('#ct')||{}).value||'World Cup 2026';
   const fee=+($('#cf')||{}).value||0;
   const cur=($('#cc')||{}).value||'EUR';
@@ -702,12 +889,12 @@ window.submitCreate=async()=>{
   if(!LIVE){toast('Connect to the backend first (tap 🔧)','🔧');return;}
   const btn=$('#createbtn'); if(btn){btn.textContent='Creating…';btn.style.opacity=.6;}
   try{
-    await apiReq('/sweepstakes',{method:'POST',body:{
+    const created=await apiReq('/sweepstakes',{method:'POST',body:{
       name,tournament_name:tour,entry_fee:fee,currency:cur,
       max_participants:+($('#cp')||{}).value||10, prize_tiers:tiers}});
     const m=document.querySelector('.modal'); if(m)m.remove();
-    await loadMySweepstakes();   // reload so the new one shows
-    view='home'; render();
+    await loadMyLeagues();
+    if(created&&created.id){await selectLeague(created.id);}else{view='leagues';render();}
     toast('Sweepstake created! 🎉','🏆');
   }catch(e){
     if(btn){btn.textContent='Create Sweepstake';btn.style.opacity=1;}
@@ -727,10 +914,10 @@ window.submitJoin=async()=>{
   if(!LIVE){toast('Connect to the backend first (tap 🔧)','🔧');return;}
   const btn=$('#joinbtn'); if(btn){btn.textContent='Joining…';btn.style.opacity=.6;}
   try{
-    await apiReq('/sweepstakes/join',{method:'POST',body:{invite_code:code}});
+    const joined=await apiReq('/sweepstakes/join',{method:'POST',body:{invite_code:code}});
     const m=document.querySelector('.modal'); if(m)m.remove();
-    await loadMySweepstakes();
-    view='home'; render();
+    await loadMyLeagues();
+    if(joined&&joined.id){await selectLeague(joined.id);}else{view='leagues';render();}
     toast('Joined! 🎉','✅');
   }catch(e){
     if(btn){btn.textContent='Join';btn.style.opacity=1;}
@@ -865,28 +1052,28 @@ function startLive(sid){
   };
   open(); wsClose=()=>{alive=false;if(ws)ws.close()};
 }
-let HAS_SWEEPSTAKE=false; // true once the signed-in user has at least one
+let HAS_SWEEPSTAKE=false; // true once a league is selected/open
 let MY_NAME=null;         // the logged-in user's username (to mark "you")
-let CUR_SWEEP=null;       // the full current sweepstake object from the backend
+let CUR_SWEEP=null;       // the currently-open sweepstake object
+let MY_LEAGUES=[];        // all sweepstakes the user is in (summary list)
 
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
   players.length=0; alloc.length=0; stages.length=0; paid.length=0;
-  HAS_SWEEPSTAKE=false;
+  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null;
 }
 
 /* Populate the local players[] from the sweepstake's REAL participants so the
-   count is correct even before any draw has happened. Marks allocations if a
-   draw exists. */
+   count is correct even before any draw has happened. */
 function applySweepstake(s){
   CUR_SWEEP=s;
   Object.assign(sweep,{name:s.name,tour:s.tournament_name,fee:s.entry_fee,
-    cur:{EUR:'€',GBP:'£',USD:'$'}[s.currency]||'€',code:s.invite_code});
+    cur:{EUR:'€',GBP:'£',USD:'$'}[s.currency]||'€',code:s.invite_code,
+    admin_id:s.admin_id});
   if(s.prize_tiers&&s.prize_tiers.length){
     prizeSplit.length=0;
     [...s.prize_tiers].sort((a,b)=>a.rank-b.rank).forEach(t=>prizeSplit.push(t.percentage));
   }
-  // Build players/paid from participants (exists immediately on join).
   players.length=0; paid.length=0;
   (s.participants||[]).forEach(p=>{
     const u=p.user||{};
@@ -896,22 +1083,34 @@ function applySweepstake(s){
   });
 }
 
-/* Load ONLY the signed-in user's sweepstakes (admin or participant).
-   Shows their first one, or leaves an empty state if they have none. */
-async function loadMySweepstakes(){
+/* Load the user's league LIST (does not auto-open one — shows the picker). */
+async function loadMyLeagues(){
   clearDemoData();
-  const list=await apiReq('/sweepstakes');
-  if(list&&list.length){
-    const s=list[0];
-    applySweepstake(s);
-    HAS_SWEEPSTAKE=true;
-    startLive(s.id);
-    await refreshLive();   // pulls leaderboard (teams/stages) if a draw exists
-    await loadFixtures();  // matches played + fixtures view
-    await loadActivity();  // recent activity feed
-  }
-  return HAS_SWEEPSTAKE;
+  try{ MY_LEAGUES = await apiReq('/sweepstakes') || []; }
+  catch(e){ MY_LEAGUES=[]; console.warn('league list failed',e); }
+  return MY_LEAGUES;
 }
+
+/* Open a specific league by id → loads full detail and live data. */
+async function selectLeague(id){
+  const s=await apiReq(`/sweepstakes/${id}`);
+  applySweepstake(s);
+  HAS_SWEEPSTAKE=true;
+  startLive(s.id);
+  await refreshLive();
+  await loadFixtures();
+  await loadActivity();
+  view='home'; render();
+}
+window.openLeague=async(id)=>{ try{await selectLeague(id);}catch(e){toast('Could not open league','⚠️');} };
+
+/* Leave the current league view and return to the "My Leagues" landing. */
+window.goToMyLeagues=async()=>{
+  if(wsClose)wsClose();
+  CUR_SWEEP=null; HAS_SWEEPSTAKE=false;
+  await loadMyLeagues();
+  view='leagues'; render();
+};
 
 /* Re-fetch the current sweepstake (for live participant-count updates). */
 async function refreshSweepstake(){
@@ -948,9 +1147,9 @@ window.doLogin=async()=>{
   setAuthBusy(true,'Sign In');
   try{
     const a=await apiReq('/auth/login',{method:'POST',auth:false,body:{email,password:pw}});
-    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||null;
-    await loadMySweepstakes();
-    auth=true;view='home';render();
+    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||null; MY_ID=(a.user&&a.user.id)||null;
+    await loadMyLeagues();
+    auth=true;view='leagues';render();
     setTimeout(()=>toast('Welcome back!','👋'),300);
   }catch(e){
     setAuthBusy(false,'Sign In');
@@ -973,9 +1172,9 @@ window.doRegister=async()=>{
   try{
     const a=await apiReq('/auth/register',{method:'POST',auth:false,
       body:{email,username:name,password:pw}});
-    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||name;
-    await loadMySweepstakes();          // new account = clean slate
-    auth=true;view='home';render();
+    JWT=a.access_token; LIVE=true; MY_NAME=(a.user&&a.user.username)||name; MY_ID=(a.user&&a.user.id)||null;
+    await loadMyLeagues();              // new account = empty league list
+    auth=true;view='leagues';render();
     setTimeout(()=>toast('Account created — welcome! 🎉','✅'),300);
   }catch(e){
     setAuthBusy(false,'Create Account');

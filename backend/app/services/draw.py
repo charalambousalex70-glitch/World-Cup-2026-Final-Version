@@ -25,8 +25,11 @@ class DrawError(Exception):
     pass
 
 
-async def run_draw(db: AsyncSession, sweepstake: Sweepstake) -> list[Allocation]:
+async def run_draw(db: AsyncSession, sweepstake: Sweepstake, excluded: list[str] | None = None) -> list[Allocation]:
     """Randomly allocate the top-N ranked teams to the N participants.
+
+    `excluded` is an optional list of team names to skip; the next-ranked teams
+    take their place so there are still exactly N teams.
 
     Clears any *unapproved* prior draw and regenerates it. Once a draw is
     approved it is immutable and this raises DrawError.
@@ -43,18 +46,23 @@ async def run_draw(db: AsyncSession, sweepstake: Sweepstake) -> list[Allocation]
 
     if n == 0:
         raise DrawError("No participants to draw for.")
-    if n > len(RANKED_TEAMS):
+
+    # Build the candidate pool, skipping excluded teams, then take the top N.
+    excluded_set = {e.strip().lower() for e in (excluded or [])}
+    candidates = [(name, flag) for name, flag in RANKED_TEAMS if name.lower() not in excluded_set]
+    if n > len(candidates):
         raise DrawError(
-            f"Too many participants ({n}); only {len(RANKED_TEAMS)} teams available."
+            f"Too many participants ({n}) for the available teams ({len(candidates)}). "
+            f"Exclude fewer teams or reduce participants."
         )
+    top_teams = candidates[:n]
 
     # Clear previous unapproved allocations AND the old team set, then create
-    # exactly the top-N ranked teams for this draw.
+    # exactly the chosen top-N teams for this draw.
     await db.execute(delete(Allocation).where(Allocation.sweepstake_id == sweepstake.id))
     await db.execute(delete(Team).where(Team.sweepstake_id == sweepstake.id))
     await db.flush()
 
-    top_teams = RANKED_TEAMS[:n]
     teams = [
         Team(sweepstake_id=sweepstake.id, name=name, flag_emoji=flag, stage="Group")
         for name, flag in top_teams

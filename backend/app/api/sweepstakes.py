@@ -157,14 +157,16 @@ async def join(body: JoinRequest, db: AsyncSession = Depends(get_db),
 
 # ---------- Draw ----------
 @router.post("/{sid}/draw", response_model=list[AllocationOut])
-async def draw(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+async def draw(sid: uuid.UUID, body: dict | None = None,
+               db: AsyncSession = Depends(get_db),
                user: User = Depends(get_current_user)):
     sweep = await _load_full(db, sid)
     if not sweep:
         raise HTTPException(404, "Not found")
     _require_admin(sweep, user)
+    excluded = (body or {}).get("excluded") or []
     try:
-        allocations = await run_draw(db, sweep)
+        allocations = await run_draw(db, sweep, excluded=excluded)
     except DrawError as e:
         raise HTTPException(409, str(e))
 
