@@ -18,7 +18,7 @@ from app.schemas import (
     PaymentUpdate, SweepstakeCreate, SweepstakeOut,
 )
 from app.services import football
-from app.services.draw import DrawError, approve_draw, run_draw
+from app.services.draw import DrawError, approve_draw, reset_draw, run_draw
 from app.services.scoring import compute_leaderboard
 from app.websocket.manager import manager
 from app.models import Fixture
@@ -126,6 +126,38 @@ async def get_sweepstake(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     return SweepstakeOut.model_validate(sweep)
 
 
+@router.patch("/{sid}", response_model=SweepstakeOut)
+async def update_sweepstake(sid: uuid.UUID, body: dict,
+                            db: AsyncSession = Depends(get_db),
+                            user: User = Depends(get_current_user)):
+    """Admin edits league settings: name, currency, and entry fee (stake)."""
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+
+    if "name" in body:
+        name = str(body["name"] or "").strip()
+        if not name:
+            raise HTTPException(422, "League name cannot be empty")
+        sweep.name = name
+    if "currency" in body and body["currency"] in ("EUR", "GBP", "USD"):
+        sweep.currency = body["currency"]
+    if "entry_fee" in body:
+        try:
+            fee = float(body["entry_fee"])
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Entry fee must be a number")
+        if fee < 0:
+            raise HTTPException(422, "Entry fee cannot be negative")
+        sweep.entry_fee = fee
+
+    await db.flush()
+    full = await _load_full(db, sid)
+    await manager.broadcast(str(sid), "leaderboard_updated", {})
+    return SweepstakeOut.model_validate(full)
+
+
 @router.delete("/{sid}", status_code=204)
 async def delete_sweepstake(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
                             user: User = Depends(get_current_user)):
@@ -196,6 +228,20 @@ async def approve(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         raise HTTPException(409, str(e))
     full = await _load_full(db, sid)
     await manager.broadcast(str(sid), "draw_approved", {})
+    return SweepstakeOut.model_validate(full)
+
+
+@router.post("/{sid}/draw/reset", response_model=SweepstakeOut)
+async def reset(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                user: User = Depends(get_current_user)):
+    """Undo the draw so the admin can re-run it (after more people join, etc.)."""
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+    await reset_draw(db, sweep)
+    full = await _load_full(db, sid)
+    await manager.broadcast(str(sid), "draw_reset", {})
     return SweepstakeOut.model_validate(full)
 
 

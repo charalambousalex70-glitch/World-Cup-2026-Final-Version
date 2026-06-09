@@ -83,4 +83,20 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
 
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
-    return user
+    return UserOut.model_validate(user)
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(body: dict, db: AsyncSession = Depends(get_db),
+                    user: User = Depends(get_current_user)):
+    """Update the signed-in user's profile (currently just the display name)."""
+    new_name = (body or {}).get("username")
+    if new_name is not None:
+        new_name = str(new_name).strip()
+        if not new_name:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Name cannot be empty")
+        if len(new_name) > 40:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Name is too long (max 40)")
+        user.username = new_name
+    await db.flush()
+    return UserOut.model_validate(user)
