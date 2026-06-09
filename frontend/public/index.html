@@ -436,31 +436,80 @@ function leagueCard(l){
 function vTeams(s){
   const isAdmin = CUR_SWEEP && CUR_SWEEP.admin_id && MY_ID && CUR_SWEEP.admin_id===MY_ID;
   const drawDone = CUR_SWEEP && CUR_SWEEP.draw_approved;
-  const n=players.length;
-  // The teams that WILL be in the draw: top-N from the ranked pool, unless
-  // already drawn (then show the actual teams from the leaderboard data).
+  const n=Math.max(players.length,1);
   const pool = (window.RANKED_POOL||[]);
-  const inDraw = drawDone && teams.length
-    ? teams.map(t=>({name:t.n,flag:t.e}))
-    : pool.slice(0,Math.max(n,1)).filter(t=>!EXCLUDED.has(t.name));
+  const canEdit = isAdmin && !drawDone;
+
+  // After an approved draw, just show the actual assigned teams.
+  if(drawDone && teams.length){
+    const assigned=teams.map(t=>({name:t.n,flag:t.e}));
+    s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
+      <h2 style="font-size:24px">Teams in the Draw</h2>
+      <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">These ${assigned.length} teams were assigned in the draw and are locked in.</span></div>
+      <div class="stagger">${assigned.map((t,i)=>teamRow(t,{rank:i+1,state:'in'},false)).join('')}</div>
+    </div>`;
+    return;
+  }
+
+  // Work out which teams make the cut: walk the ranked list, skip excluded,
+  // take the first N. Everything after that is a "reserve".
+  const inDrawNames=new Set();
+  let taken=0;
+  for(const t of pool){
+    if(taken>=n)break;
+    if(EXCLUDED.has(t.name))continue;
+    inDrawNames.add(t.name); taken++;
+  }
+  const inDrawCount=inDrawNames.size;
+
+  // Build the full ranked list with each team's status.
+  const rows=pool.map((t,i)=>{
+    let state='reserve';
+    if(EXCLUDED.has(t.name))state='excluded';
+    else if(inDrawNames.has(t.name))state='in';
+    return teamRow(t,{rank:i+1,state},canEdit);
+  }).join('');
+
+  // The teams actually in the draw (for the top summary section).
+  const inList=pool.filter(t=>inDrawNames.has(t.name));
+
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
-    <h2 style="font-size:24px">Teams in the Draw</h2>
+    <h2 style="font-size:24px">Teams</h2>
     <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">
-      ${drawDone?'These teams were assigned in the draw.':`The top ${n} ranked teams (one per player) go into the draw. ${isAdmin?'You can exclude teams below — excluded ones are skipped and the next-ranked team takes their place.':'Only the league admin can change which teams are included.'}`}
+      The top <b class="gold">${n}</b> ranked teams (one per player) go into the draw. ${canEdit?'Exclude any team and the next-ranked reserve below it takes its place.':(isAdmin?'':'Only the league admin can change which teams are included.')}
     </span></div>
-    <div class="between"><div class="label">In the draw (${inDraw.length})</div></div>
-    <div class="stagger">${inDraw.map(t=>teamRow(t,true,isAdmin&&!drawDone)).join('')||'<div class="card mut" style="text-align:center;font-size:13px">No teams yet — people need to join first.</div>'}</div>
-    ${(!drawDone&&isAdmin)?`
-      <div class="between" style="margin-top:6px"><div class="label">Excluded</div></div>
-      <div class="stagger">${[...EXCLUDED].map(name=>{const t=pool.find(x=>x.name===name)||{name,flag:'🏳️'};return teamRow({name:t.name,flag:t.flag},false,true);}).join('')||'<div class="card mut" style="text-align:center;font-size:12px">None excluded.</div>'}</div>
-    `:''}
+
+    <div class="between"><div class="label">In the draw (${inDrawCount}/${n})</div></div>
+    <div class="stagger">${inList.length?inList.map(t=>{
+      const rank=pool.findIndex(x=>x.name===t.name)+1;
+      return teamRow(t,{rank,state:'in'},canEdit);
+    }).join(''):'<div class="card mut" style="text-align:center;font-size:13px">No one has joined yet.</div>'}</div>
+
+    <div class="between" style="margin-top:8px"><div class="label">Full ranking — most likely to win</div><span class="mut" style="font-size:11px">${pool.length} teams</span></div>
+    <p class="mut" style="font-size:12px;margin-top:-4px">Top ${n} (green) are in. Next in line (grey) come in if you exclude someone above them.</p>
+    <div class="stagger">${rows}</div>
   </div>`;
 }
-function teamRow(t,included,canEdit){
-  return `<div class="lb" style="margin-bottom:0">
+function teamRow(t,info,canEdit){
+  const {rank,state}=info||{};
+  // state: 'in' (drawn/included), 'excluded', or 'reserve' (below the cutoff)
+  const badge = state==='in'
+    ? '<span class="badge b-paid" style="font-size:10px">IN DRAW</span>'
+    : state==='excluded'
+      ? '<span class="badge b-due" style="font-size:10px">EXCLUDED</span>'
+      : '<span class="badge" style="font-size:10px;background:rgba(150,160,190,.15);color:var(--mut)">RESERVE</span>';
+  const dim = state==='reserve' ? 'opacity:.62' : (state==='excluded'?'opacity:.7':'');
+  const rankBadge = rank ? `<div class="mono mut" style="width:26px;text-align:right;font-size:13px">${rank}</div>` : '';
+  const safe=(t.name||'').replace(/'/g,"\\'");
+  const btn = canEdit
+    ? `<button class="btn ${state==='excluded'?'gold':'ghost'}" style="width:auto;padding:6px 12px;font-size:12px" onclick="toggleTeam('${safe}')">${state==='excluded'?'Add back':'Exclude'}</button>`
+    : '';
+  return `<div class="lb" style="margin-bottom:0;${dim}">
+    ${rankBadge}
     <div class="flag" style="font-size:20px">${t.flag||'🏳️'}</div>
     <div style="flex:1;font-weight:600;font-size:15px">${t.name}</div>
-    ${canEdit?`<button class="btn ${included?'ghost':'gold'}" style="width:auto;padding:7px 14px;font-size:13px" onclick="toggleTeam('${t.name.replace(/'/g,"\\'")}')">${included?'Exclude':'Add back'}</button>`:''}
+    ${badge}
+    ${btn}
   </div>`;
 }
 let EXCLUDED=new Set();
