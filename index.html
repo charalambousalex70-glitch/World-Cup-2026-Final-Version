@@ -205,6 +205,21 @@ const notifs=[
 const sweep={name:'Office World Cup',tour:'World Cup 2026',fee:20,cur:'€',code:'WC26-FK7'};
 const prizeSplit=[60,25,15];
 
+/* Flag lookup for the full ranked team set — used to show flags on live
+   fixtures for teams that may not be in the current sweepstake's draw. */
+const FIXTURE_FLAGS={
+ 'Spain':'🇪🇸','France':'🇫🇷','England':'🏴󠁧󠁢󠁥󠁮󠁧󠁿','Brazil':'🇧🇷','Portugal':'🇵🇹','Argentina':'🇦🇷',
+ 'Germany':'🇩🇪','Netherlands':'🇳🇱','Belgium':'🇧🇪','Norway':'🇳🇴','Japan':'🇯🇵','Colombia':'🇨🇴',
+ 'USA':'🇺🇸','Mexico':'🇲🇽','Uruguay':'🇺🇾','Morocco':'🇲🇦','Switzerland':'🇨🇭','Croatia':'🇭🇷',
+ 'Türkiye':'🇹🇷','Turkey':'🇹🇷','Ecuador':'🇪🇨','Senegal':'🇸🇳','Paraguay':'🇵🇾','Canada':'🇨🇦',
+ 'Austria':'🇦🇹','Sweden':'🇸🇪','Ivory Coast':'🇨🇮','Algeria':'🇩🇿','Scotland':'🏴󠁧󠁢󠁳󠁣󠁴󠁿','Australia':'🇦🇺',
+ 'Cape Verde':'🇨🇻','Curacao':'🇨🇼','DR Congo':'🇨🇩','Haiti':'🇭🇹','Iran':'🇮🇷','Iraq':'🇮🇶',
+ 'Jordan':'🇯🇴','New Zealand':'🇳🇿','Panama':'🇵🇦','Qatar':'🇶🇦','Saudi Arabia':'🇸🇦','South Africa':'🇿🇦',
+ 'Tunisia':'🇹🇳','Uzbekistan':'🇺🇿','Ghana':'🇬🇭','Czechia':'🇨🇿','Bosnia & Herzegovina':'🇧🇦',
+ 'South Korea':'🇰🇷','Egypt':'🇪🇬'
+};
+window.FIXTURE_FLAGS=FIXTURE_FLAGS;
+
 /* ---------------- HELPERS ---------------- */
 const T=i=>teams[i]||{n:'TBD',e:'⏳',c:'#888'};  // safe fallback before the draw
 const pool=()=>players.length*sweep.fee;
@@ -420,11 +435,18 @@ function lbRow(x,i){
 }
 function vBoard(s){
   const r=ranked();
+  const drawn = alloc.length>0 && teams.length>0; // a draw has happened
+  if(LIVE && players.length===0){
+    s.innerHTML=`<div class="fade" style="padding-top:40px;text-align:center">
+      <h2 style="font-size:24px;margin-bottom:10px">Leaderboard</h2>
+      <p class="mut" style="font-size:14px">No one's joined yet. Share your invite code to get people in.</p></div>`;
+    return;
+  }
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
     <h2 style="font-size:24px">Leaderboard</h2>
-    <div class="card" style="padding:13px"><div class="between"><span class="mut" style="font-size:13px">Live ranking · updates as results come in</span><span class="live"><span class="dot"></span>LIVE</span></div></div>
+    <div class="card" style="padding:13px"><div class="between"><span class="mut" style="font-size:13px">${drawn?'Live ranking · updates as results come in':`${players.length} joined · teams assigned at the draw`}</span><span class="live"><span class="dot"></span>${drawn?'LIVE':players.length+' IN'}</span></div></div>
     <div class="stagger">${r.map((x,i)=>lbRow(x,i)).join('')}</div>
-    <div class="card" style="font-size:12px" class="mut">
+    <div class="card" style="font-size:12px">
       <div class="label" style="margin-bottom:8px">Scoring</div>
       <div class="between mut"><span>Group stage</span><span class="mono">10 pts</span></div>
       <div class="between mut"><span>Round of 16</span><span class="mono">25 pts</span></div>
@@ -489,6 +511,15 @@ window.approveDraw=()=>{
 };
 
 /* ---------------- FIXTURES ---------------- */
+let LIVE_FIXTURES=null; // populated from the backend when available
+async function loadFixtures(){
+  if(!LIVE||!CUR_SWEEP)return null;
+  try{
+    const rows=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/fixtures`);
+    LIVE_FIXTURES=rows||[];
+    return LIVE_FIXTURES;
+  }catch(e){console.warn('fixtures load failed',e);return null;}
+}
 function vFixtures(s){
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
     <h2 style="font-size:24px">Matches</h2>
@@ -501,22 +532,35 @@ function vFixtures(s){
     document.querySelectorAll('#fxseg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
     $('#fxlist').innerHTML=fxList(b.dataset.f);
   });
+  // Fetch real fixtures in the background and re-render when they arrive.
+  if(LIVE && LIVE_FIXTURES===null){
+    loadFixtures().then(()=>{const el=$('#fxlist');if(el)el.innerHTML=fxList(
+      (document.querySelector('#fxseg button.on')||{}).dataset?.f||'all');});
+  }
+}
+function flagFor(name){
+  const t=teams.find(t=>t.n===name);
+  return (t&&t.e)|| (window.FIXTURE_FLAGS&&FIXTURE_FLAGS[name]) || '🏳️';
 }
 function fxList(f){
-  let list=fixtures;
-  if(f==='live')list=fixtures.filter(x=>x.live);
-  if(f==='done')list=fixtures.filter(x=>x.st==='FT');
-  if(!list.length)return '<div class="card mut" style="text-align:center;font-size:13px">No matches in this view.</div>';
-  return list.map(x=>{
-    const ta=teams.find(t=>t.n===x.a),tb=teams.find(t=>t.n===x.b);
-    const live=x.live;
-    return `<div class="fx">
-      <div class="fxteam"><span style="font-size:22px">${ta.e}</span>${x.a}</div>
-      <div style="text-align:center"><div class="score ${live?'lv':''}">${x.sa} – ${x.sb}</div>
-        <div class="mut" style="font-size:10px;margin-top:4px">${live?`<span class="gold">${x.st} ●</span>`:x.st} · ${x.stage}</div></div>
-      <div class="fxteam r">${x.b}<span style="font-size:22px">${tb.e}</span></div>
-    </div>`;
-  }).join('');
+  // Use live backend fixtures when present; otherwise the local sample set.
+  const usingLive = LIVE && Array.isArray(LIVE_FIXTURES);
+  let list;
+  if(usingLive){
+    list=LIVE_FIXTURES.map(x=>({a:x.home_team,b:x.away_team,sa:x.home_score??'–',sb:x.away_score??'–',
+      st:x.status==='LIVE'?'LIVE':(x.status==='FINISHED'?'FT':'•'),live:x.status==='LIVE',stage:x.stage||''}));
+  }else{
+    list=fixtures.slice();
+  }
+  if(f==='live')list=list.filter(x=>x.live);
+  if(f==='done')list=list.filter(x=>x.st==='FT');
+  if(!list.length)return `<div class="card mut" style="text-align:center;font-size:13px">${usingLive?'No matches yet — fixtures appear once the tournament schedule is published.':'No matches in this view.'}</div>`;
+  return list.map(x=>`<div class="fx">
+      <div class="fxteam"><span style="font-size:22px">${flagFor(x.a)}</span>${x.a}</div>
+      <div style="text-align:center"><div class="score ${x.live?'lv':''}">${x.sa} – ${x.sb}</div>
+        <div class="mut" style="font-size:10px;margin-top:4px">${x.live?`<span class="gold">${x.st} ●</span>`:x.st}${x.stage?' · '+x.stage:''}</div></div>
+      <div class="fxteam r">${x.b}<span style="font-size:22px">${flagFor(x.b)}</span></div>
+    </div>`).join('');
 }
 
 /* ---------------- ADMIN ---------------- */
@@ -729,6 +773,9 @@ async function apiReq(path,{method='GET',body,auth=true,retries=4}={}){
   throw lastErr;
 }
 function applyLeaderboard(rows){
+  // Only the leaderboard (post-draw) carries team/stage data. If it's empty
+  // (no draw yet), keep the participant list we already loaded — don't wipe it.
+  if(!rows||!rows.length){alloc.length=0;stages.length=0;return;}
   players.length=0; alloc.length=0; stages.length=0;
   rows.forEach((row)=>{
     let ti=teams.findIndex(t=>t.n===row.team_name);
@@ -752,8 +799,12 @@ function startLive(sid){
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
       if(m.event==='leaderboard_updated'&&m.data.leaderboard){applyLeaderboard(m.data.leaderboard);render()}
-      else if(['draw_approved','draw_completed','fixtures_updated'].includes(m.event)){refreshLive()}
-      else if(m.event==='participant_joined'){toast(`${m.data.username} joined!`,'👋');refreshLive()}
+      else if(m.event==='participant_joined'){
+        if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
+        refreshSweepstake();   // re-fetch real participant list → count updates
+      }
+      else if(['draw_approved','draw_completed'].includes(m.event)){refreshSweepstake();}
+      else if(m.event==='fixtures_updated'){refreshLive();}
     }catch{}};
     ws.onclose=()=>{if(alive)setTimeout(open,1500)};
     ws.onopen=()=>{setInterval(()=>{if(ws.readyState===1)ws.send('ping')},25000)};
@@ -762,11 +813,33 @@ function startLive(sid){
 }
 let HAS_SWEEPSTAKE=false; // true once the signed-in user has at least one
 let MY_NAME=null;         // the logged-in user's username (to mark "you")
+let CUR_SWEEP=null;       // the full current sweepstake object from the backend
 
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
-  players.length=0; alloc.length=0; stages.length=0;
+  players.length=0; alloc.length=0; stages.length=0; paid.length=0;
   HAS_SWEEPSTAKE=false;
+}
+
+/* Populate the local players[] from the sweepstake's REAL participants so the
+   count is correct even before any draw has happened. Marks allocations if a
+   draw exists. */
+function applySweepstake(s){
+  CUR_SWEEP=s;
+  Object.assign(sweep,{name:s.name,tour:s.tournament_name,fee:s.entry_fee,
+    cur:{EUR:'€',GBP:'£',USD:'$'}[s.currency]||'€',code:s.invite_code});
+  if(s.prize_tiers&&s.prize_tiers.length){
+    prizeSplit.length=0;
+    [...s.prize_tiers].sort((a,b)=>a.rank-b.rank).forEach(t=>prizeSplit.push(t.percentage));
+  }
+  // Build players/paid from participants (exists immediately on join).
+  players.length=0; paid.length=0;
+  (s.participants||[]).forEach(p=>{
+    const u=p.user||{};
+    players.push({id:p.id,name:u.username||'Player',
+      av:(u.username||'P').slice(0,2).toUpperCase(),col:u.avatar_color||'#888'});
+    paid.push(!!p.has_paid);
+  });
 }
 
 /* Load ONLY the signed-in user's sweepstakes (admin or participant).
@@ -776,17 +849,23 @@ async function loadMySweepstakes(){
   const list=await apiReq('/sweepstakes');
   if(list&&list.length){
     const s=list[0];
-    Object.assign(sweep,{name:s.name,tour:s.tournament_name,fee:s.entry_fee,
-      cur:{EUR:'€',GBP:'£',USD:'$'}[s.currency]||'€',code:s.invite_code});
-    // Use the REAL prize split from the backend, not the demo default.
-    if(s.prize_tiers&&s.prize_tiers.length){
-      prizeSplit.length=0;
-      s.prize_tiers.sort((a,b)=>a.rank-b.rank).forEach(t=>prizeSplit.push(t.percentage));
-    }
+    applySweepstake(s);
     HAS_SWEEPSTAKE=true;
-    startLive(s.id); await refreshLive();
+    startLive(s.id);
+    await refreshLive();   // pulls leaderboard (teams/stages) if a draw exists
   }
   return HAS_SWEEPSTAKE;
+}
+
+/* Re-fetch the current sweepstake (for live participant-count updates). */
+async function refreshSweepstake(){
+  if(!CUR_SWEEP)return;
+  try{
+    const s=await apiReq(`/sweepstakes/${CUR_SWEEP.id}`);
+    applySweepstake(s);
+    await refreshLive();
+    render();
+  }catch(e){console.warn('refreshSweepstake failed',e)}
 }
 
 function getAuthInputs(){

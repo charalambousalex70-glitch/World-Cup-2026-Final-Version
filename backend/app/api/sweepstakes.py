@@ -25,14 +25,6 @@ from app.models import Fixture
 
 router = APIRouter(prefix="/sweepstakes", tags=["sweepstakes"])
 
-# Sample teams used when running offline (no football API key).
-_SAMPLE_TEAMS = [
-    ("Brazil", "🇧🇷"), ("France", "🇫🇷"), ("England", "🏴"), ("Argentina", "🇦🇷"),
-    ("Spain", "🇪🇸"), ("Germany", "🇩🇪"), ("Portugal", "🇵🇹"), ("Netherlands", "🇳🇱"),
-    ("Belgium", "🇧🇪"), ("Croatia", "🇭🇷"), ("Italy", "🇮🇹"), ("Morocco", "🇲🇦"),
-]
-
-
 def _gen_code(n: int = 7) -> str:
     alphabet = string.ascii_uppercase + string.digits
     return "WC" + "".join(secrets.choice(alphabet) for _ in range(n - 2))
@@ -70,10 +62,14 @@ async def create_sweepstake(
     if abs(sum(t.percentage for t in body.prize_tiers) - 100) > 0.01:
         raise HTTPException(422, "Prize percentages must sum to 100")
 
+    # Default to the World Cup competition on football-data.org ("WC") so the
+    # poller can pull live fixtures/results unless the caller specifies another.
+    competition = body.competition_code or "WC"
+
     sweep = Sweepstake(
         name=body.name,
         tournament_name=body.tournament_name,
-        competition_code=body.competition_code,
+        competition_code=competition,
         entry_fee=body.entry_fee,
         currency=body.currency,
         max_participants=body.max_participants,
@@ -90,14 +86,9 @@ async def create_sweepstake(
     for tier in body.prize_tiers:
         db.add(PrizeTier(sweepstake_id=sweep.id, rank=tier.rank, percentage=tier.percentage))
 
-    # Import teams: from football API if configured, else sample set.
-    api_teams = await football.fetch_teams(body.competition_code) if body.competition_code else []
-    if api_teams:
-        for t in api_teams:
-            db.add(Team(sweepstake_id=sweep.id, **t))
-    else:
-        for name, flag in _SAMPLE_TEAMS:
-            db.add(Team(sweepstake_id=sweep.id, name=name, flag_emoji=flag))
+    # Teams are NOT created here. They're generated at draw time as the top-N
+    # ranked contenders (N = number of participants), so the set always matches
+    # how many people actually joined. See app.services.draw.run_draw.
 
     await db.flush()
     return await _load_full(db, sweep.id)

@@ -5,6 +5,12 @@ Guarantees:
 - no duplicate team assignments
 - cryptographically-seeded shuffle for fairness
 - idempotency: refuses to run if the draw is already approved
+
+Team selection: the draw uses the TOP-N teams from the ranked contender list
+(app.services.teams_data.RANKED_TEAMS), where N = number of participants. So
+with 10 players, the 10 most-likely-to-win teams are drawn — everyone gets a
+genuine contender. The team set is (re)generated at draw time so it always
+matches the final participant count.
 """
 import secrets
 
@@ -12,6 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Allocation, Participant, Sweepstake, Team
+from app.services.teams_data import RANKED_TEAMS
 
 
 class DrawError(Exception):
@@ -19,9 +26,9 @@ class DrawError(Exception):
 
 
 async def run_draw(db: AsyncSession, sweepstake: Sweepstake) -> list[Allocation]:
-    """Randomly allocate teams to participants. Returns the new allocations.
+    """Randomly allocate the top-N ranked teams to the N participants.
 
-    This clears any *unapproved* prior draw and regenerates it. Once a draw is
+    Clears any *unapproved* prior draw and regenerates it. Once a draw is
     approved it is immutable and this raises DrawError.
     """
     if sweepstake.draw_approved:
@@ -32,23 +39,31 @@ async def run_draw(db: AsyncSession, sweepstake: Sweepstake) -> list[Allocation]
             select(Participant).where(Participant.sweepstake_id == sweepstake.id)
         )
     ).scalars().all()
-    teams = (
-        await db.execute(select(Team).where(Team.sweepstake_id == sweepstake.id))
-    ).scalars().all()
+    n = len(participants)
 
-    if not participants:
+    if n == 0:
         raise DrawError("No participants to draw for.")
-    if len(teams) < len(participants):
+    if n > len(RANKED_TEAMS):
         raise DrawError(
-            f"Not enough teams ({len(teams)}) for participants ({len(participants)})."
+            f"Too many participants ({n}); only {len(RANKED_TEAMS)} teams available."
         )
 
-    # Wipe any previous unapproved allocations.
-    await db.execute(
-        delete(Allocation).where(Allocation.sweepstake_id == sweepstake.id)
-    )
+    # Clear previous unapproved allocations AND the old team set, then create
+    # exactly the top-N ranked teams for this draw.
+    await db.execute(delete(Allocation).where(Allocation.sweepstake_id == sweepstake.id))
+    await db.execute(delete(Team).where(Team.sweepstake_id == sweepstake.id))
+    await db.flush()
 
-    # Secure shuffle of the team pool.
+    top_teams = RANKED_TEAMS[:n]
+    teams = [
+        Team(sweepstake_id=sweepstake.id, name=name, flag_emoji=flag, stage="Group")
+        for name, flag in top_teams
+    ]
+    for t in teams:
+        db.add(t)
+    await db.flush()
+
+    # Secure shuffle so the ranking doesn't bias who gets which team.
     pool = list(teams)
     _secure_shuffle(pool)
 

@@ -39,7 +39,10 @@ async def _poll_once() -> None:
     async with AsyncSessionLocal() as db:
         active = (
             await db.execute(
-                select(Sweepstake).where(Sweepstake.status == "active")
+                select(Sweepstake).where(
+                    Sweepstake.competition_code.isnot(None),
+                    Sweepstake.status.in_(["open", "drawn", "active"]),
+                )
             )
         ).scalars().all()
 
