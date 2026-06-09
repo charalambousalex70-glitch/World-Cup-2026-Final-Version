@@ -91,7 +91,7 @@ async def create_sweepstake(
     # how many people actually joined. See app.services.draw.run_draw.
 
     await db.flush()
-    return await _load_full(db, sweep.id)
+    return SweepstakeOut.model_validate(await _load_full(db, sweep.id))
 
 
 @router.get("", response_model=list[SweepstakeOut])
@@ -107,7 +107,14 @@ async def my_sweepstakes(
         await db.execute(select(Sweepstake.id).where(Sweepstake.admin_id == user.id))
     ).scalars().all()
     ids.update(admin)
-    return [await _load_full(db, sid) for sid in ids]
+    # Serialize to Pydantic NOW (session alive, relationships eager-loaded) so
+    # nothing lazy-loads during FastAPI's later serialization → no MissingGreenlet.
+    out = []
+    for sid in ids:
+        s = await _load_full(db, sid)
+        if s:
+            out.append(SweepstakeOut.model_validate(s))
+    return out
 
 
 @router.get("/{sid}", response_model=SweepstakeOut)
@@ -116,7 +123,39 @@ async def get_sweepstake(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     sweep = await _load_full(db, sid)
     if not sweep:
         raise HTTPException(404, "Sweepstake not found")
-    return sweep
+    return SweepstakeOut.model_validate(sweep)
+
+
+@router.patch("/{sid}", response_model=SweepstakeOut)
+async def update_sweepstake(sid: uuid.UUID, body: dict,
+                            db: AsyncSession = Depends(get_db),
+                            user: User = Depends(get_current_user)):
+    """Admin edits league settings: name, currency, and entry fee (stake)."""
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+
+    if "name" in body:
+        name = str(body["name"] or "").strip()
+        if not name:
+            raise HTTPException(422, "League name cannot be empty")
+        sweep.name = name
+    if "currency" in body and body["currency"] in ("EUR", "GBP", "USD"):
+        sweep.currency = body["currency"]
+    if "entry_fee" in body:
+        try:
+            fee = float(body["entry_fee"])
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Entry fee must be a number")
+        if fee < 0:
+            raise HTTPException(422, "Entry fee cannot be negative")
+        sweep.entry_fee = fee
+
+    await db.flush()
+    full = await _load_full(db, sid)
+    await manager.broadcast(str(sid), "leaderboard_updated", {})
+    return SweepstakeOut.model_validate(full)
 
 
 @router.delete("/{sid}", status_code=204)
@@ -133,8 +172,9 @@ async def delete_sweepstake(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
 @router.post("/join", response_model=SweepstakeOut)
 async def join(body: JoinRequest, db: AsyncSession = Depends(get_db),
                user: User = Depends(get_current_user)):
+    code = (body.invite_code or "").strip().upper()
     sweep = (
-        await db.execute(select(Sweepstake).where(Sweepstake.invite_code == body.invite_code.upper()))
+        await db.execute(select(Sweepstake).where(Sweepstake.invite_code == code))
     ).scalar_one_or_none()
     if not sweep:
         raise HTTPException(404, "Invalid invite code")
@@ -143,7 +183,7 @@ async def join(body: JoinRequest, db: AsyncSession = Depends(get_db),
 
     full = await _load_full(db, sweep.id)
     if any(p.user_id == user.id for p in full.participants):
-        return full
+        return SweepstakeOut.model_validate(full)
     if len(full.participants) >= sweep.max_participants:
         raise HTTPException(409, "Sweepstake is full")
 
@@ -152,7 +192,7 @@ async def join(body: JoinRequest, db: AsyncSession = Depends(get_db),
     refreshed = await _load_full(db, sweep.id)
     await manager.broadcast(str(sweep.id), "participant_joined",
                             {"username": user.username, "count": len(refreshed.participants)})
-    return refreshed
+    return SweepstakeOut.model_validate(refreshed)
 
 
 # ---------- Draw ----------
@@ -188,7 +228,7 @@ async def approve(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         raise HTTPException(409, str(e))
     full = await _load_full(db, sid)
     await manager.broadcast(str(sid), "draw_approved", {})
-    return full
+    return SweepstakeOut.model_validate(full)
 
 
 async def _allocations_out(db: AsyncSession, allocations: list[Allocation]) -> list[AllocationOut]:
@@ -259,7 +299,7 @@ async def set_payment(sid: uuid.UUID, pid: uuid.UUID, body: PaymentUpdate,
         raise HTTPException(404, "Participant not found")
     part.has_paid = body.has_paid
     await db.flush()
-    return await _load_full(db, sid)
+    return SweepstakeOut.model_validate(await _load_full(db, sid))
 
 
 # ---------- Notifications ----------

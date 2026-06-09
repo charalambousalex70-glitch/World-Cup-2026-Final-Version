@@ -750,9 +750,9 @@ function vFixtures(s){
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
     <h2 style="font-size:24px">Matches</h2>
     <div class="seg" id="fxseg">
-      <button class="on" data-f="all">All</button><button data-f="live">Live</button><button data-f="done">Results</button>
+      <button class="on" data-f="upcoming">Upcoming</button><button data-f="live">Live</button><button data-f="done">Results</button><button data-f="all">All</button>
     </div>
-    <div id="fxlist" class="stagger" style="display:flex;flex-direction:column;gap:9px">${fxList('all')}</div>
+    <div id="fxlist" class="stagger" style="display:flex;flex-direction:column;gap:9px">${fxList('upcoming')}</div>
   </div>`;
   document.querySelectorAll('#fxseg button').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('#fxseg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
@@ -761,12 +761,25 @@ function vFixtures(s){
   // Fetch real fixtures in the background and re-render when they arrive.
   if(LIVE && LIVE_FIXTURES===null){
     loadFixtures().then(()=>{const el=$('#fxlist');if(el)el.innerHTML=fxList(
-      (document.querySelector('#fxseg button.on')||{}).dataset?.f||'all');});
+      (document.querySelector('#fxseg button.on')||{}).dataset?.f||'upcoming');});
   }
 }
 function flagFor(name){
   const t=teams.find(t=>t.n===name);
   return (t&&t.e)|| (window.FIXTURE_FLAGS&&FIXTURE_FLAGS[name]) || '🏳️';
+}
+function kickoffLabel(iso){
+  if(!iso)return '';
+  const d=new Date(iso);
+  if(isNaN(d))return '';
+  const now=new Date();
+  const opts={hour:'2-digit',minute:'2-digit'};
+  const time=d.toLocaleTimeString([],opts);
+  const sameDay=d.toDateString()===now.toDateString();
+  const tomorrow=new Date(now); tomorrow.setDate(now.getDate()+1);
+  if(sameDay)return `Today ${time}`;
+  if(d.toDateString()===tomorrow.toDateString())return `Tomorrow ${time}`;
+  return d.toLocaleDateString([],{day:'numeric',month:'short'})+' '+time;
 }
 function fxList(f){
   // Use live backend fixtures when present; otherwise the local sample set.
@@ -774,50 +787,125 @@ function fxList(f){
   let list;
   if(usingLive){
     list=LIVE_FIXTURES.map(x=>({a:x.home_team,b:x.away_team,sa:x.home_score??'–',sb:x.away_score??'–',
-      st:x.status==='LIVE'?'LIVE':(x.status==='FINISHED'?'FT':'•'),live:x.status==='LIVE',stage:x.stage||''}));
+      status:x.status,
+      st:x.status==='LIVE'?'LIVE':(x.status==='FINISHED'?'FT':'•'),
+      live:x.status==='LIVE',stage:x.stage||'',kickoff:x.kickoff}));
   }else{
-    list=fixtures.slice();
+    list=fixtures.map(x=>({...x,status:x.live?'LIVE':(x.st==='FT'?'FINISHED':'SCHEDULED'),kickoff:x.kickoff}));
   }
   if(f==='live')list=list.filter(x=>x.live);
-  if(f==='done')list=list.filter(x=>x.st==='FT');
-  if(!list.length)return `<div class="card mut" style="text-align:center;font-size:13px">${usingLive?'No matches yet — fixtures appear once the tournament schedule is published.':'No matches in this view.'}</div>`;
-  return list.map(x=>`<div class="fx">
+  else if(f==='done')list=list.filter(x=>x.status==='FINISHED');
+  else if(f==='upcoming')list=list.filter(x=>x.status==='SCHEDULED'||x.live);
+
+  // Sort: live first, then upcoming by soonest kickoff, results by most recent.
+  list.sort((a,b)=>{
+    if(a.live!==b.live)return a.live?-1:1;
+    const ka=a.kickoff?new Date(a.kickoff).getTime():0, kb=b.kickoff?new Date(b.kickoff).getTime():0;
+    return f==='done'?kb-ka:ka-kb;
+  });
+  if(!list.length)return `<div class="card mut" style="text-align:center;font-size:13px">${
+    usingLive?(f==='upcoming'?'No upcoming matches scheduled yet.':f==='done'?'No results yet — check back once matches are played.':f==='live'?'No matches are live right now.':'No matches yet — fixtures appear once the schedule is published.')
+    :'No matches in this view.'}</div>`;
+  return list.map(x=>{
+    const meta = x.live ? `<span class="gold">${x.st} ●</span>`
+      : (x.status==='FINISHED' ? 'FT' : (kickoffLabel(x.kickoff)||'TBD'));
+    return `<div class="fx">
       <div class="fxteam"><span style="font-size:22px">${flagFor(x.a)}</span>${x.a}</div>
-      <div style="text-align:center"><div class="score ${x.live?'lv':''}">${x.sa} – ${x.sb}</div>
-        <div class="mut" style="font-size:10px;margin-top:4px">${x.live?`<span class="gold">${x.st} ●</span>`:x.st}${x.stage?' · '+x.stage:''}</div></div>
+      <div style="text-align:center"><div class="score ${x.live?'lv':''}">${x.status==='SCHEDULED'?'vs':x.sa+' – '+x.sb}</div>
+        <div class="mut" style="font-size:10px;margin-top:4px">${meta}${x.stage?' · '+x.stage:''}</div></div>
       <div class="fxteam r">${x.b}<span style="font-size:22px">${flagFor(x.b)}</span></div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /* ---------------- ADMIN ---------------- */
 function vAdmin(s){
+  const isAdmin = CUR_SWEEP && CUR_SWEEP.admin_id && MY_ID && CUR_SWEEP.admin_id===MY_ID;
   const funds=paid.filter(Boolean).length*sweep.fee;
+  if(LIVE && !isAdmin){
+    s.innerHTML=`<div class="fade" style="padding-top:40px;text-align:center">
+      <div style="font-size:40px;margin-bottom:10px">🔒</div>
+      <h2 style="font-size:22px">Admin Only</h2>
+      <p class="mut" style="font-size:14px;max-width:300px;margin:8px auto 0">Only the person who created this league can manage settings and payments.</p></div>`;
+    return;
+  }
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:13px;padding-top:4px">
     <h2 style="font-size:24px">Admin Panel</h2>
     <div class="grid2">
-      <div class="card" style="text-align:center"><div class="mono gold" style="font-size:26px;font-weight:700">${sweep.cur}${funds}</div><div class="label">Collected</div></div>
-      <div class="card" style="text-align:center"><div class="mono" style="font-size:26px;font-weight:700;color:var(--red)">${sweep.cur}${pool()-funds}</div><div class="label">Outstanding</div></div>
+      <div class="card" style="text-align:center"><div class="mono gold" style="font-size:26px;font-weight:700">${sweep.cur}${funds.toLocaleString()}</div><div class="label">Collected</div></div>
+      <div class="card" style="text-align:center"><div class="mono" style="font-size:26px;font-weight:700;color:var(--red)">${sweep.cur}${(pool()-funds).toLocaleString()}</div><div class="label">Outstanding</div></div>
     </div>
-    <button class="btn gold" onclick="openCreate()">＋ Create New Sweepstake</button>
+    <button class="btn gold" onclick="openEditLeague()">⚙️ Edit League Settings</button>
     <div class="grid2">
       <button class="btn" onclick="view='draw';render()">🎲 Run Draw</button>
       <button class="btn" onclick="openInvite()">🔗 Invite Link</button>
     </div>
-    <div class="between" style="margin-top:4px"><div class="label">Payment Tracking</div><span class="mut" style="font-size:12px">${paid.filter(Boolean).length}/${players.length} paid</span></div>
-    ${players.map((p,i)=>`<div class="lb" style="margin-bottom:0">
+    <div class="between" style="margin-top:4px"><div class="label">Payment Tracking</div><span class="mut" style="font-size:12px">${paid.filter(Boolean).length}/${players.length} paid · tap to toggle</span></div>
+    ${players.length?players.map((p,i)=>`<div class="lb" style="margin-bottom:0;cursor:pointer" onclick="togglePaid(${i})">
       <div class="avatar" style="background:${p.col}">${p.av}</div>
-      <div style="flex:1;font-weight:700;font-size:15px">${p.name}</div>
-      <div class="row" style="gap:6px;font-size:13px"><span>${T(alloc[i]).e}</span><span class="mut">${T(alloc[i]).n}</span></div>
-      <span class="badge ${paid[i]?'b-paid':'b-due'}">${paid[i]?'PAID':'DUE'}</span>
-    </div>`).join('')}
+      <div style="flex:1;font-weight:700;font-size:15px">${p.name}${p.name===(MY_NAME||'')?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
+      <span class="badge ${paid[i]?'b-paid':'b-due'}">${paid[i]?'✓ PAID':'DUE'}</span>
+    </div>`).join(''):'<div class="card mut" style="text-align:center;font-size:13px">No one has joined yet.</div>'}
     <div class="card" style="margin-top:6px">
       <div class="label" style="margin-bottom:10px">Prize Distribution</div>
       ${prizeSplit.map((p,i)=>`<div class="between" style="margin-bottom:8px">
-        <span>${['🥇 Winner','🥈 Runner-up','🥉 Third'][i]} · ${p}%</span>
-        <b class="gold mono">${sweep.cur}${pool()*p/100}</b></div>`).join('')}
+        <span>${['🥇 Winner','🥈 Runner-up','🥉 Third'][i]||('#'+(i+1))} · ${p}%</span>
+        <b class="gold mono">${sweep.cur}${(pool()*p/100).toLocaleString()}</b></div>`).join('')}
     </div>
   </div>`;
 }
+window.togglePaid=async(i)=>{
+  const p=players[i]; if(!p)return;
+  if(!LIVE){paid[i]=!paid[i];render();return;}   // demo mode
+  if(!(CUR_SWEEP&&CUR_SWEEP.admin_id===MY_ID)){toast('Only the admin can change payments','🔒');return;}
+  const want=!paid[i];
+  paid[i]=want; render();  // optimistic
+  try{
+    await apiReq(`/sweepstakes/${CUR_SWEEP.id}/participants/${p.id}/payment`,
+      {method:'PATCH',body:{has_paid:want}});
+  }catch(e){
+    paid[i]=!want; render();  // revert on failure
+    toast('Could not update payment: '+(e.message||'error'),'⚠️');
+  }
+};
+window.openEditLeague=()=>{
+  const c=sweep.cur;
+  modal(`<h2 style="font-size:21px;margin-bottom:14px">Edit League Settings</h2>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div><div class="label" style="margin-bottom:6px">League name</div>
+        <input id="el_name" value="${(sweep.name||'').replace(/"/g,'&quot;')}" maxlength="60"></div>
+      <div class="grid2">
+        <div><div class="label" style="margin-bottom:6px">Currency</div>
+          <select id="el_cur">
+            <option value="EUR" ${c==='€'?'selected':''}>€ EUR</option>
+            <option value="GBP" ${c==='£'?'selected':''}>£ GBP</option>
+            <option value="USD" ${c==='$'?'selected':''}>$ USD</option>
+          </select></div>
+        <div><div class="label" style="margin-bottom:6px">Stake (per player)</div>
+          <input id="el_fee" type="number" min="0" step="1" value="${sweep.fee}"></div>
+      </div>
+    </div>
+    <button class="btn gold" id="el_save" style="margin-top:16px" onclick="saveLeague()">Save Changes</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Cancel</button>`);
+};
+window.saveLeague=async()=>{
+  const name=(($('#el_name')||{}).value||'').trim();
+  const currency=($('#el_cur')||{}).value||'EUR';
+  const entry_fee=+($('#el_fee')||{}).value||0;
+  if(!name){toast('League name cannot be empty','✏️');return;}
+  if(!LIVE){toast('Connect to the backend first','🔧');return;}
+  const btn=$('#el_save'); if(btn){btn.textContent='Saving…';btn.style.opacity=.6;}
+  try{
+    await apiReq(`/sweepstakes/${CUR_SWEEP.id}`,{method:'PATCH',
+      body:{name,currency,entry_fee}});
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    await refreshSweepstake();
+    toast('League updated ✅','✅');
+  }catch(e){
+    if(btn){btn.textContent='Save Changes';btn.style.opacity=1;}
+    toast('Could not save: '+(e.message||'error'),'⚠️');
+  }
+};
 
 /* ---------------- PROFILE ---------------- */
 function vProfile(s){
@@ -827,12 +915,38 @@ function vProfile(s){
     <h2 style="font-size:24px">${MY_NAME||'You'}</h2>
     <span class="mut" style="margin-top:-8px;font-size:13px">${LIVE?'Connected · live account':'Demo mode'}</span>
     <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px;margin-top:10px">
-      <button class="btn gold" onclick="goToMyLeagues()">🏆 My Leagues</button>
+      <button class="btn gold" onclick="openEditName()">✏️ Edit My Name</button>
+      <button class="btn ghost" onclick="goToMyLeagues()">🏆 My Leagues</button>
       <button class="btn ghost" onclick="showDiag()">🔧 Backend Settings</button>
       <button class="btn ghost" onclick="doLogout()" style="color:var(--red)">Sign Out</button>
     </div>
   </div>`;
 }
+window.openEditName=()=>{
+  modal(`<h2 style="font-size:21px;margin-bottom:14px">Edit Your Name</h2>
+    <div class="label" style="margin-bottom:6px">Display name</div>
+    <input id="editname" value="${(MY_NAME||'').replace(/"/g,'&quot;')}" placeholder="Your name" maxlength="40">
+    <button class="btn gold" id="savenamebtn" style="margin-top:16px" onclick="saveName()">Save</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Cancel</button>`);
+};
+window.saveName=async()=>{
+  const name=(($('#editname')||{}).value||'').trim();
+  if(!name){toast('Please enter a name','✏️');return;}
+  if(!LIVE){toast('Connect to the backend first','🔧');return;}
+  const btn=$('#savenamebtn'); if(btn){btn.textContent='Saving…';btn.style.opacity=.6;}
+  try{
+    const u=await apiReq('/auth/me',{method:'PATCH',body:{username:name}});
+    MY_NAME=(u&&u.username)||name;
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    // Refresh league/participant data so the new name shows everywhere.
+    if(CUR_SWEEP){await refreshSweepstake();} else {await loadMyLeagues();}
+    render();
+    toast('Name updated ✅','✅');
+  }catch(e){
+    if(btn){btn.textContent='Save';btn.style.opacity=1;}
+    toast('Could not update: '+(e.message||'error'),'⚠️');
+  }
+};
 window.doLogout=()=>{
   if(wsClose)wsClose();
   // Reset all session state so the next user starts clean.
@@ -856,8 +970,17 @@ window.openInvite=()=>{
     <p class="mut" style="font-size:13px;margin-bottom:16px">Share the code or link to join “${sweep.name}”.</p>
     <div class="label" style="margin-bottom:8px">Invite Code</div>
     <div class="codebox">${sweep.code}</div>
-    <button class="btn gold" style="margin-top:14px" onclick="toast('Invite link copied!','📋')">📋 Copy Invite Link</button>
-    <button class="btn ghost" style="margin-top:10px" onclick="toast('Joined via code!','✅')">Demo: Join by Code</button>`);
+    <button class="btn gold" style="margin-top:14px" onclick="copyInvite()">📋 Copy Invite Link</button>
+    <button class="btn ghost" style="margin-top:10px" onclick="copyCode()">Copy Code Only</button>`);
+};
+window.copyInvite=async()=>{
+  const link=`${location.origin}${location.pathname}?join=${encodeURIComponent(sweep.code)}`;
+  try{ await navigator.clipboard.writeText(link); toast('Invite link copied!','📋'); }
+  catch(e){ toast('Copy this link: '+link,'🔗'); }
+};
+window.copyCode=async()=>{
+  try{ await navigator.clipboard.writeText(sweep.code); toast('Code copied!','📋'); }
+  catch(e){ toast('Your code: '+sweep.code,'🔗'); }
 };
 window.openCreate=()=>{
   modal(`<h2 style="font-size:22px;margin-bottom:14px">Create Sweepstake</h2>
@@ -938,7 +1061,7 @@ window.submitJoin=async()=>{
    This means you can change the backend on the LIVE site without
    editing code or redeploying — just open Settings and paste the URL.
    ============================================================ */
-const DEFAULT_API = "https://sweepstake-api-gd38.onrender.com"; // fallback only
+const DEFAULT_API = "https://sweepstake-api-0myw.onrender.com"; // live backend (everyone connects here by default)
 
 function resolveApiUrl(){
   try{
@@ -1215,6 +1338,14 @@ window.showDiag=async()=>{
 if('serviceWorker'in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
 }
+
+/* If opened from an invite link (?join=CODE), remember it so we can auto-open
+   the join dialog once the user is signed in. */
+let PENDING_JOIN=null;
+try{
+  const j=new URLSearchParams(location.search).get('join');
+  if(j)PENDING_JOIN=j.trim().toUpperCase();
+}catch{}
 
 render();
 </script>

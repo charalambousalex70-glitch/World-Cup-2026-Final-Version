@@ -80,7 +80,12 @@ class Sweepstake(Base):
 
     @property
     def prize_pool(self) -> float:
-        return (self.entry_fee or 0) * len(self.participants)
+        # Guard against the relationship not being loaded (avoids triggering a
+        # lazy DB load during serialization). Returns 0 rather than raising.
+        try:
+            return (self.entry_fee or 0) * len(self.participants)
+        except Exception:
+            return 0.0
 
 
 class Participant(Base):

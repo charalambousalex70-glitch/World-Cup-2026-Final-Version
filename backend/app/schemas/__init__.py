@@ -132,6 +132,7 @@ class FixtureOut(BaseModel):
     away_score: int | None
     status: str
     stage: str
+    kickoff: datetime | None = None
     kickoff: datetime | None
 
 
