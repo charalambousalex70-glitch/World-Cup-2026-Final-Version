@@ -301,6 +301,7 @@ function renderAuth(){
     <button id="primarybtn" class="btn gold" style="margin-top:18px" onclick="submitAuth()">Sign In</button>
     <p class="mut" style="margin-top:20px;font-size:12px"><a href="#" onclick="showDiag();return false" style="color:var(--gold)">backend settings 🔧</a></p>
   </div>`;
+  authMode='login';        // always start on Sign In; never stuck on register
   prewarmBackend();
 }
 let authMode='login';
@@ -318,7 +319,11 @@ function authErr(msg){
   const el=$('#autherr'); if(!el)return;
   if(msg){el.textContent=msg;el.style.display='block';}else{el.style.display='none';}
 }
-window.submitAuth=()=>{ authMode==='register'?doRegister():doLogin(); };
+window.submitAuth=()=>{
+  // Trust the visibly-active tab, not just the variable, so they can't desync.
+  const reg = $('#seg-register') && $('#seg-register').classList.contains('on');
+  if(reg) doRegister(); else doLogin();
+};
 
 /* Pre-warm: ping /health when the sign-in screen loads so the server starts
    waking up while the user types — usually ready by the time they submit. */
@@ -326,7 +331,6 @@ function prewarmBackend(){
   if(!window.__API_URL__)return;
   fetch(`${window.__API_URL__}/health`).catch(()=>{});
 }
-window.doLogin=()=>{auth=true;view='home';render();setTimeout(()=>toast('Welcome back!','👋'),300)};
 
 /* ---------------- TOP / TABS ---------------- */
 function topBar(inLeague){
