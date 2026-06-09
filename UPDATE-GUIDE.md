@@ -1,42 +1,112 @@
-# FINAL UPDATE — what to change in your GitHub repo
+# Deployment Guide
 
-Replace these 8 files with the versions in this package. Everything else in
-your repo stays as-is. After committing, Render and Vercel auto-redeploy.
+Two services: **backend + database on Render**, **frontend on Vercel**.
+Budget ~15 minutes. You'll need GitHub, a Render account, and a Vercel account.
+A football-data.org API key is optional (free tier at football-data.org).
 
-## Files to update
+---
 
-| # | File in your repo | What changed |
-|---|-------------------|--------------|
-| 1 | `frontend/public/index.html` | Editable backend URL (🔧 panel), honest LIVE/DEMO badge, real error messages |
-| 2 | `frontend/public/sw.js` | Network-first service worker — new deploys show up instantly (fixes the cache trap) |
-| 3 | `frontend/public/manifest.webmanifest` | Icons embedded as data — no missing-file 404s |
-| 4 | `backend/app/main.py` | Auto-seed on first boot; CORS auto-allows `*.vercel.app`; friendly root route |
-| 5 | `backend/app/core/config.py` | Adds the `AUTO_SEED` setting |
-| 6 | `backend/runtime.txt` | Pins Python 3.12 (prevents the pydantic-core build failure) |
-| 7 | `render.yaml` | Pins `PYTHON_VERSION=3.12.7` for fresh Blueprint deploys |
-| 8 | `START-HERE.md` | Updated instructions for the new flow |
+## 0. Push to GitHub
 
-## How to update (GitHub web)
+```bash
+cd sweepstake
+git init && git add . && git commit -m "SweepStake Live"
+git remote add origin git@github.com:YOU/sweepstake.git
+git push -u origin main
+```
 
-For each file: open it in your repo → click the pencil (Edit) → select all →
-paste the new contents → Commit. Or upload the whole folder from the zip and
-let GitHub overwrite.
+---
 
-## After it redeploys — the ONE thing you do on the live site
+## 1. Backend + Postgres on Render
 
-1. Open your Vercel site (the real `https://...vercel.app`, not a downloaded file).
-2. Click the **🔧** icon (top bar) or the **backend settings** link on sign-in.
-3. Paste your Render backend URL (e.g. `https://sweepstake-api-0myw.onrender.com`).
-4. Click **Save & Reconnect**.
-5. Sign in: `you@example.com` / `demo1234`.
+### Option A — Blueprint (recommended)
+1. Render Dashboard → **New** → **Blueprint**.
+2. Select your repo. Render reads `render.yaml` and provisions:
+   - `sweepstake-api` (web service)
+   - `sweepstake-db` (PostgreSQL)
+   - `DATABASE_URL` wired automatically, `JWT_SECRET` auto-generated.
+3. Before the first deploy finishes, set the two `sync:false` vars under the
+   service's **Environment** tab:
+   - `CORS_ORIGINS` → your Vercel URL (add it after step 2; you can use
+     `https://*.vercel.app` temporarily).
+   - `FOOTBALL_API_KEY` → your key, or leave blank for offline/demo mode.
+4. Deploy. When live, hit `https://sweepstake-api.onrender.com/health` →
+   `{"status":"ok"}`.
 
-The badge should turn green and say **LIVE**. If it stays gold/**DEMO**, the 🔧
-panel now shows a health check and the exact reason (unreachable / CORS / login),
-plus the address to add to `CORS_ORIGINS` on your Render service.
+### Option B — Manual
+- New **PostgreSQL** instance; copy its Internal Connection String.
+- New **Web Service** from the repo, root dir `backend`:
+  - Build: `pip install -r requirements.txt`
+  - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+  - Env: `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `FOOTBALL_API_KEY`.
 
-## Notes
-- The backend now auto-allows any `*.vercel.app` origin, so you likely won't
-  need to touch `CORS_ORIGINS` at all anymore.
-- The backend auto-seeds the demo data on first boot — no Shell step needed.
-- Rotate your secrets (JWT_SECRET, football API key, DB password) since they
-  appeared in screenshots during setup.
+### Seed demo data (optional)
+Render Shell for the service:
+```bash
+python -m app.seed
+```
+Creates the "Office World Cup" demo (invite `WC26DEMO`, login
+`you@example.com` / `demo1234`).
+
+> Tables auto-create on startup. For versioned migrations later, wire up
+> Alembic against `app.models.Base.metadata`.
+
+---
+
+## 2. Frontend on Vercel
+
+1. Vercel → **Add New** → **Project** → import the repo.
+2. **Root Directory**: `frontend`. Framework preset: **Other**.
+   `vercel.json` already sets output dir `public` and SPA rewrites — no build
+   command needed.
+3. Deploy. You'll get `https://your-app.vercel.app`.
+4. Point the frontend at your API. Two ways:
+   - **Simplest:** edit one line in `frontend/public/index.html`:
+     ```js
+     window.__API_URL__ = "https://sweepstake-api.onrender.com";
+     ```
+     commit & redeploy; **or**
+   - inject it without editing source by adding this before the app script
+     in `index.html`:
+     ```html
+     <script>window.__API_URL__="https://sweepstake-api.onrender.com";</script>
+     ```
+5. Go back to Render and set `CORS_ORIGINS` to your exact Vercel URL, e.g.
+   `https://your-app.vercel.app`. Redeploy the backend.
+
+---
+
+## 3. Verify the full loop
+
+1. Open the Vercel URL on your phone → **Add to Home Screen** (PWA install).
+2. Sign in. The toast should say **"Connected · live data"** (not "demo mode").
+3. As admin: create a sweepstake → share the invite code → run the draw →
+   approve it.
+4. With a `FOOTBALL_API_KEY` set and the sweepstake `active`, the poller updates
+   results within ~1 minute and the leaderboard moves with no refresh.
+5. Force an update any time via **Sync** (admin) → `POST /sweepstakes/{id}/sync`.
+
+---
+
+## Notes & gotchas
+
+- **Render free tier sleeps.** First request after idle takes ~30s to wake; the
+  WebSocket reconnect logic handles this gracefully.
+- **WebSockets** work over Render's HTTPS as `wss://` automatically — the client
+  derives the URL from `__API_URL__`.
+- **football-data.org free tier** is rate-limited (10 req/min) and covers major
+  competitions. Set `FOOTBALL_POLL_SECONDS` ≥ 60. For API-FOOTBALL or other
+  providers, adapt `services/football.py` (the mapping is isolated there).
+- **CORS errors** = `CORS_ORIGINS` doesn't exactly match your Vercel origin
+  (scheme + host, no trailing slash).
+- **Secrets**: never commit `.env`. `JWT_SECRET` is auto-generated by the
+  blueprint; rotate it to invalidate all sessions.
+
+---
+
+## Stripe (future)
+
+Payment tracking is already modelled (`participants.has_paid`). To take real
+money: add a `POST /sweepstakes/{id}/checkout` route creating a Stripe Checkout
+Session, and a webhook that flips `has_paid` on `checkout.session.completed`.
+The UI's payment badges will reflect it with no frontend change.
