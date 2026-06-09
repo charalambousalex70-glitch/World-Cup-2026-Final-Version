@@ -252,18 +252,22 @@ function renderAuth(){
       <div><div class="label" style="margin-bottom:6px">Email</div><input id="em" placeholder="you@example.com" value="you@example.com"></div>
       <div><div class="label" style="margin-bottom:6px">Password</div><input id="pw" type="password" placeholder="••••••••" value="demo1234"></div>
     </div>
-    <button class="btn gold" style="margin-top:22px" onclick="doLogin()">Sign In</button>
+    <button id="loginbtn" class="btn gold" style="margin-top:22px" onclick="doLogin()">Sign In</button>
     <button class="btn ghost" style="margin-top:10px" onclick="doLogin()">Create Account</button>
-    <p class="mut" style="margin-top:22px;font-size:12px">Demo build · tap Sign In to explore</p>
+    <p class="mut" style="margin-top:22px;font-size:12px">Connects to your live backend · <a href="#" onclick="showDiag();return false" style="color:var(--gold)">backend settings 🔧</a></p>
   </div>`;
 }
 window.doLogin=()=>{auth=true;view='home';render();setTimeout(()=>toast('Welcome back!','👋'),300)};
 
 /* ---------------- TOP / TABS ---------------- */
 function topBar(){
+  const badge = LIVE
+    ? `<div class="live"><span class="dot"></span>LIVE</div>`
+    : `<div class="live" style="background:rgba(255,200,61,.12);color:var(--gold);border-color:rgba(255,200,61,.3);cursor:pointer" onclick="showDiag()"><span class="dot" style="background:var(--gold)"></span>DEMO</div>`;
   return `<div class="top">
     <div class="logo"><div class="ball"></div>SWEEP<span class="gold">STAKE</span></div>
-    <div class="live"><span class="dot"></span>LIVE</div>
+    ${badge}
+    <div class="iconbtn" onclick="showDiag()" title="Backend settings">🔧</div>
     <div class="iconbtn" onclick="toggleTheme()">${dark?'☀️':'🌙'}</div>
   </div>`;
 }
@@ -535,14 +539,34 @@ window.openCreate=()=>{
 };
 
 /* ============================================================
-   BACKEND INTEGRATION LAYER
-   - If window.__API_URL__ is set and the backend responds, the app
-     uses LIVE data + WebSocket updates.
-   - Otherwise it runs in DEMO mode with the seeded data above.
+   BACKEND INTEGRATION LAYER  (v3 — runtime-configurable)
+   The backend URL is NO LONGER hardcoded. Resolution order:
+     1. ?api=https://... in the URL (one-time override)
+     2. value saved in the browser (Settings screen)
+     3. the build-time default below
+   This means you can change the backend on the LIVE site without
+   editing code or redeploying — just open Settings and paste the URL.
    ============================================================ */
-window.__API_URL__ = window.__API_URL__ || "https://sweepstake-api-0myw.onrender.com";
-let LIVE=false, JWT=null, SID=null, wsClose=null;
+const DEFAULT_API = "https://sweepstake-api-gd38.onrender.com"; // fallback only
+
+function resolveApiUrl(){
+  try{
+    const q=new URLSearchParams(location.search).get('api');
+    if(q){localStorage.setItem('ssl_api',q.replace(/\/+$/,''));}
+  }catch{}
+  let saved=null; try{saved=localStorage.getItem('ssl_api')}catch{}
+  return (saved||DEFAULT_API).replace(/\/+$/,''); // strip trailing slash
+}
+window.__API_URL__ = resolveApiUrl();
+let LIVE=false, JWT=null, SID=null, wsClose=null, LAST_ERR='';
 const API=()=>`${window.__API_URL__}/api/v1`;
+
+window.setApiUrl=(u)=>{
+  u=(u||'').trim().replace(/\/+$/,'');
+  try{localStorage.setItem('ssl_api',u)}catch{}
+  window.__API_URL__=u; toast('Backend saved — reconnecting…','🔧');
+  setTimeout(()=>location.reload(),700);
+};
 
 async function apiReq(path,{method='GET',body,auth=true}={}){
   const h={'Content-Type':'application/json'};
@@ -584,7 +608,8 @@ function startLive(sid){
   open(); wsClose=()=>{alive=false;if(ws)ws.close()};
 }
 async function tryGoLive(email,password){
-  if(!window.__API_URL__)return false;
+  LAST_ERR='';
+  if(!window.__API_URL__){LAST_ERR='No backend URL configured.';return false;}
   try{
     const a=await apiReq('/auth/login',{method:'POST',auth:false,body:{email,password}});
     JWT=a.access_token; LIVE=true;
@@ -596,14 +621,44 @@ async function tryGoLive(email,password){
       startLive(s.id); await refreshLive();
     }
     return true;
-  }catch(e){console.warn('Live backend unavailable, using demo mode:',e.message);LIVE=false;return false}
+  }catch(e){
+    LAST_ERR=e.message||'Connection failed';
+    // Distinguish the common failure modes for a clearer message.
+    if(/Failed to fetch|NetworkError|CORS/i.test(LAST_ERR))
+      LAST_ERR='Could not reach the backend. Check the backend URL in Settings, that the server is awake, and that CORS_ORIGINS on the server matches this site.';
+    else if(/Incorrect|password|credentials/i.test(LAST_ERR))
+      LAST_ERR='Connected to the backend, but the login was rejected. Run the seed step, or register a new account.';
+    console.warn('Live backend unavailable:',e.message);
+    LIVE=false; return false;
+  }
 }
 window.doLogin=async()=>{
   const email=(document.querySelector('#em')||{}).value||'you@example.com';
   const pw=(document.querySelector('#pw')||{}).value||'demo1234';
+  const btn=document.querySelector('#loginbtn'); if(btn){btn.textContent='Connecting…';btn.style.opacity=.6;}
   const ok=await tryGoLive(email,pw);
   auth=true;view='home';render();
-  setTimeout(()=>toast(ok?'Connected · live data':'Welcome (demo mode)','👋'),300);
+  setTimeout(()=>{
+    if(ok){toast('Connected · live data','✅');}
+    else{toast('Demo mode — tap the 🔧 to fix the backend','⚠️');}
+  },300);
+};
+window.showDiag=async()=>{
+  const url=window.__API_URL__;
+  let health='checking…';
+  try{const r=await fetch(`${url}/health`);health=r.ok?'✅ reachable ('+r.status+')':'⚠️ responded '+r.status;}
+  catch(e){health='❌ unreachable — '+(e.message||'network error');}
+  modal(`<h2 style="font-size:21px;margin-bottom:6px">Backend Settings</h2>
+    <p class="mut" style="font-size:12px;margin-bottom:14px">Change which server this app talks to. No redeploy needed.</p>
+    <div class="label" style="margin-bottom:6px">Backend URL</div>
+    <input id="diagurl" value="${url}" placeholder="https://your-api.onrender.com">
+    <div class="card" style="background:var(--card2);margin:12px 0;font-size:12px">
+      <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
+      ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
+      <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
+    </div>
+    <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
 };
 if('serviceWorker'in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));

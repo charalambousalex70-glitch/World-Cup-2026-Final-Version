@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     FOOTBALL_API_KEY: str = ""
     FOOTBALL_POLL_SECONDS: int = 60  # how often to poll for live results
 
+    # On first boot with an empty DB, load the demo sweepstake automatically.
+    AUTO_SEED: bool = True
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

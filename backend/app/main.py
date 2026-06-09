@@ -5,22 +5,42 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
 from app.api import auth, sweepstakes
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import AsyncSessionLocal, Base, engine
 from app.services.poller import poll_loop
 from app.websocket import routes as ws_routes
 
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("startup")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables if they don't exist (Alembic is preferred for prod migrations).
+    # Create tables if they don't exist.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # Start background football poller.
+
+    # Auto-seed demo data on first boot so the app is usable immediately
+    # (no manual Shell step). Safe to run every boot: it no-ops if data exists.
+    if settings.AUTO_SEED:
+        try:
+            from app.models import Sweepstake
+            from app.seed import seed
+            async with AsyncSessionLocal() as db:
+                exists = (
+                    await db.execute(select(Sweepstake.id).limit(1))
+                ).scalar_one_or_none()
+            if not exists:
+                log.info("Empty database — running demo seed.")
+                await seed()
+            else:
+                log.info("Data present — skipping seed.")
+        except Exception:
+            log.exception("Auto-seed skipped due to error (app still starts).")
+
     task = asyncio.create_task(poll_loop())
     yield
     task.cancel()
@@ -28,9 +48,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 
+# Allow the configured origins exactly, plus any *.vercel.app preview/prod URL
+# via regex — so renaming the Vercel project never breaks CORS again.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_list,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,6 +62,16 @@ app.add_middleware(
 app.include_router(auth.router, prefix=settings.API_V1)
 app.include_router(sweepstakes.router, prefix=settings.API_V1)
 app.include_router(ws_routes.router)  # WebSockets are not under /api/v1
+
+
+@app.get("/", tags=["meta"])
+async def root():
+    return {
+        "service": settings.PROJECT_NAME,
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+    }
 
 
 @app.get("/health", tags=["meta"])

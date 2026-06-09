@@ -1,48 +1,46 @@
-# START HERE — Your deployment
+# START HERE — SweepStake Live (v3, hardened)
 
-This package already has every fix from setup baked in:
-- Python pinned to 3.12 (`backend/runtime.txt` + `PYTHON_VERSION` in `render.yaml`)
-- Your live API URL set in `frontend/public/index.html`
-- Hardened service worker + self-contained manifest icons (no missing-file errors)
+This version fixes the fragile parts that caused setup pain. Key changes:
 
-## Your addresses
-- **Backend (Render):** https://sweepstake-api-gd38.onrender.com
-- **Frontend (Vercel):** https://world-cup-2026-eight-iota.vercel.app
+1. **Backend URL is now editable on the live site** — no more editing code &
+   redeploying when your Render URL changes. Open the app, tap the **🔧** icon
+   (top bar, or the link on the sign-in screen), paste your backend URL, Save.
+2. **The DEMO/LIVE badge is now honest** — it shows **DEMO** (gold) when not
+   connected and **LIVE** (green) when connected. Tap DEMO to open settings.
+3. **Real error messages** — if it can't connect, the 🔧 panel tells you exactly
+   why (unreachable vs. CORS vs. login rejected) and shows the address to put in
+   CORS_ORIGINS.
+4. **No more cache trap** — the service worker is network-first for the page, so
+   new deploys show up immediately.
+5. **Auto-seed** — the backend loads the demo data itself on first boot. No more
+   running `python -m app.seed` in the Shell by hand.
+6. **CORS auto-allows *.vercel.app** — renaming your Vercel project won't break it.
 
-## Upload steps
-1. Upload this whole folder to your GitHub repo (replace existing files).
-2. Render auto-redeploys the backend. Wait for "Live", then check
-   https://sweepstake-api-gd38.onrender.com/health → should show
-   `{"status":"ok","service":"SweepStake Live"}`
-3. Vercel auto-redeploys the frontend.
+## Deploy (fresh)
 
-## The ONE setting you must add by hand in Render
-The Blueprint can't know your Vercel URL, so add this once in
-Render → your service → **Environment** tab → Edit → Add:
+### Backend — Render
+1. New → **Blueprint**, point at this repo. It builds the API + Postgres.
+2. It will ask for `CORS_ORIGINS` — you can leave it blank now (the server also
+   auto-allows any `*.vercel.app` URL). Optionally paste your exact Vercel URL.
+3. Wait for **Live**. Visit `<your-api>/health` → `{"status":"ok",...}`.
+   The demo data seeds itself automatically.
 
-```
-Key:   CORS_ORIGINS
-Value: https://world-cup-2026-eight-iota.vercel.app
-```
+### Frontend — Vercel
+1. Add New → Project → this repo.
+2. **Root Directory: `frontend`**. Framework: Other. Deploy.
+3. Open the site, click **🔧**, paste your Render API URL, **Save & Reconnect**.
+4. Sign in: **you@example.com / demo1234** → should show **LIVE**.
 
-(no trailing slash). Save. Render restarts automatically.
+That's it. The 🔧 step replaces all the code-editing/redeploy/cache-clearing
+that used to be required.
 
-## Load the demo login (once)
-In Render → your service → **Shell** tab, run:
+## Quick fixes
+- **Stuck on DEMO?** Tap 🔧. The health line tells you if the backend is
+  reachable. If it says CORS, the panel shows the exact address to add to
+  `CORS_ORIGINS` on the Render service.
+- **Always test the real URL** (`https://....vercel.app`), never a downloaded
+  `index.html` from your computer.
 
-```
-python -m app.seed
-```
-
-Then sign in at your Vercel site with:  **you@example.com / demo1234**
-
-## IMPORTANT: open the REAL site
-Always test at **https://world-cup-2026-eight-iota.vercel.app** —
-NOT a downloaded `index.html` from your computer. A local `file:///...`
-copy cannot reach the backend and will always show "demo mode".
-
-## Security note
-The secrets shown on screen during setup (JWT_SECRET, FOOTBALL_API_KEY,
-database password) were visible in screenshots. Once everything works,
-rotate them: regenerate the football-data.org key, change JWT_SECRET to a
-new random value, and rotate the database password in Render.
+## Security
+Rotate the secrets that were visible during setup: regenerate the
+football-data.org key, set a fresh random `JWT_SECRET`, rotate the DB password.
