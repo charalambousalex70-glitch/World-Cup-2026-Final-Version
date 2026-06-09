@@ -247,17 +247,40 @@ function renderAuth(){
   <div class="auth fade">
     <div class="ball"></div>
     <h1>Sweep<span class="gold">Stake</span><br>Live</h1>
-    <p class="mut" style="margin:12px 0 26px;font-size:14px">Real-time football sweepstakes for your crew.</p>
-    <div style="display:flex;flex-direction:column;gap:12px;text-align:left">
-      <div><div class="label" style="margin-bottom:6px">Name <span class="mut" style="text-transform:none;font-weight:400">(only needed to create an account)</span></div><input id="un" placeholder="Your name" value=""></div>
-      <div><div class="label" style="margin-bottom:6px">Email</div><input id="em" placeholder="you@example.com" value="you@example.com"></div>
-      <div><div class="label" style="margin-bottom:6px">Password</div><input id="pw" type="password" placeholder="••••••••" value="demo1234"></div>
+    <p class="mut" style="margin:12px 0 22px;font-size:14px">Real-time football sweepstakes for your crew.</p>
+    <div class="seg" style="margin-bottom:16px" id="authseg">
+      <button class="on" onclick="setAuthMode('login')" id="seg-login">Sign In</button>
+      <button onclick="setAuthMode('register')" id="seg-register">Create Account</button>
     </div>
-    <button id="loginbtn" class="btn gold" style="margin-top:22px" onclick="doLogin()">Sign In</button>
-    <button class="btn ghost" style="margin-top:10px" onclick="doRegister()">Create Account</button>
-    <p class="mut" style="margin-top:22px;font-size:12px">Connects to your live backend · <a href="#" onclick="showDiag();return false" style="color:var(--gold)">backend settings 🔧</a></p>
+    <div style="display:flex;flex-direction:column;gap:12px;text-align:left">
+      <div id="namewrap" style="display:none"><div class="label" style="margin-bottom:6px">Your name</div>
+        <input id="un" placeholder="e.g. Alex" autocomplete="name"></div>
+      <div><div class="label" style="margin-bottom:6px">Email</div>
+        <input id="em" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="you@company.com"></div>
+      <div><div class="label" style="margin-bottom:6px">Password</div>
+        <input id="pw" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+    </div>
+    <div id="autherr" style="display:none;margin-top:12px;padding:11px 13px;border-radius:11px;background:rgba(255,91,110,.12);border:1px solid rgba(255,91,110,.3);color:var(--red);font-size:13px"></div>
+    <button id="primarybtn" class="btn gold" style="margin-top:18px" onclick="submitAuth()">Sign In</button>
+    <p class="mut" style="margin-top:20px;font-size:12px"><a href="#" onclick="showDiag();return false" style="color:var(--gold)">backend settings 🔧</a></p>
   </div>`;
 }
+let authMode='login';
+window.setAuthMode=(m)=>{
+  authMode=m;
+  const reg=m==='register';
+  $('#namewrap').style.display=reg?'block':'none';
+  $('#primarybtn').textContent=reg?'Create Account':'Sign In';
+  $('#pw').setAttribute('autocomplete',reg?'new-password':'current-password');
+  $('#seg-login').classList.toggle('on',!reg);
+  $('#seg-register').classList.toggle('on',reg);
+  authErr('');
+};
+function authErr(msg){
+  const el=$('#autherr'); if(!el)return;
+  if(msg){el.textContent=msg;el.style.display='block';}else{el.style.display='none';}
+}
+window.submitAuth=()=>{ authMode==='register'?doRegister():doLogin(); };
 window.doLogin=()=>{auth=true;view='home';render();setTimeout(()=>toast('Welcome back!','👋'),300)};
 
 /* ---------------- TOP / TABS ---------------- */
@@ -687,60 +710,70 @@ async function loadMySweepstakes(){
   return HAS_SWEEPSTAKE;
 }
 
-async function tryGoLive(email,password){
-  LAST_ERR='';
-  if(!window.__API_URL__){LAST_ERR='No backend URL configured.';return false;}
+function getAuthInputs(){
+  return {
+    name:((document.querySelector('#un')||{}).value||'').trim(),
+    email:((document.querySelector('#em')||{}).value||'').trim().toLowerCase(),
+    pw:(document.querySelector('#pw')||{}).value||'',
+  };
+}
+function setAuthBusy(busy,label){
+  const b=document.querySelector('#primarybtn');
+  if(b){b.textContent=busy?'Please wait…':label;b.style.opacity=busy?.6:1;b.style.pointerEvents=busy?'none':'auto';}
+}
+function emailLooksValid(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);}
+
+window.doLogin=async()=>{
+  authErr('');
+  const {email,pw}=getAuthInputs();
+  if(!window.__API_URL__){authErr('No backend configured. Tap “backend settings 🔧”.');return;}
+  if(!emailLooksValid(email)){authErr('Please enter a valid email address.');return;}
+  if(!pw){authErr('Please enter your password.');return;}
+  setAuthBusy(true,'Sign In');
   try{
-    const a=await apiReq('/auth/login',{method:'POST',auth:false,body:{email,password}});
+    const a=await apiReq('/auth/login',{method:'POST',auth:false,body:{email,password:pw}});
     JWT=a.access_token; LIVE=true;
     await loadMySweepstakes();
-    return true;
+    auth=true;view='home';render();
+    setTimeout(()=>toast('Welcome back!','👋'),300);
   }catch(e){
-    LAST_ERR=e.message||'Connection failed';
-    // Distinguish the common failure modes for a clearer message.
-    if(/Failed to fetch|NetworkError|CORS/i.test(LAST_ERR))
-      LAST_ERR='Could not reach the backend. Check the backend URL in Settings, that the server is awake, and that CORS_ORIGINS on the server matches this site.';
-    else if(/Incorrect|password|credentials/i.test(LAST_ERR))
-      LAST_ERR='Connected to the backend, but the login was rejected. Check your email and password, or create an account.';
-    console.warn('Live backend unavailable:',e.message);
-    LIVE=false; return false;
+    setAuthBusy(false,'Sign In');
+    const msg=e.message||'';
+    if(/Failed to fetch|NetworkError|CORS/i.test(msg))
+      authErr('Could not reach the server. It may be waking up — wait a few seconds and try again.');
+    else if(/Incorrect|password|credentials|401/i.test(msg))
+      authErr('Incorrect email or password. New here? Tap “Create Account” above.');
+    else authErr(msg||'Something went wrong. Please try again.');
   }
-}
-window.doLogin=async()=>{
-  const email=(document.querySelector('#em')||{}).value||'you@example.com';
-  const pw=(document.querySelector('#pw')||{}).value||'demo1234';
-  const btn=document.querySelector('#loginbtn'); if(btn){btn.textContent='Connecting…';btn.style.opacity=.6;}
-  const ok=await tryGoLive(email,pw);
-  auth=true;view='home';render();
-  setTimeout(()=>{
-    if(ok){toast('Connected · live data','✅');}
-    else{toast('Demo mode — tap the 🔧 to fix the backend','⚠️');}
-  },300);
 };
 window.doRegister=async()=>{
-  const name=(document.querySelector('#un')||{}).value.trim();
-  const email=(document.querySelector('#em')||{}).value.trim();
-  const pw=(document.querySelector('#pw')||{}).value||'';
-  if(!name){toast('Enter a name to create an account','✏️');return;}
-  if(!email||pw.length<6){toast('Email + password (6+ chars) required','✏️');return;}
-  if(!window.__API_URL__){toast('Set the backend first (tap 🔧)','🔧');return;}
+  authErr('');
+  const {name,email,pw}=getAuthInputs();
+  if(!window.__API_URL__){authErr('No backend configured. Tap “backend settings 🔧”.');return;}
+  if(!name){authErr('Please enter your name.');return;}
+  if(!emailLooksValid(email)){authErr('Please enter a valid email address.');return;}
+  if(pw.length<6){authErr('Password must be at least 6 characters.');return;}
+  setAuthBusy(true,'Create Account');
   try{
-    // Create the account on the backend, then connect with it.
     const a=await apiReq('/auth/register',{method:'POST',auth:false,
       body:{email,username:name,password:pw}});
     JWT=a.access_token; LIVE=true;
-    // New account starts with no sweepstakes — clean slate.
-    await loadMySweepstakes();
+    await loadMySweepstakes();          // new account = clean slate
     auth=true;view='home';render();
-    setTimeout(()=>toast('Account created · you are LIVE','🎉'),300);
+    setTimeout(()=>toast('Account created — welcome! 🎉','✅'),300);
   }catch(e){
+    setAuthBusy(false,'Create Account');
     const msg=e.message||'';
     if(/already registered|exists|409/i.test(msg)){
-      toast('Email exists — signing you in instead','↪️');
+      // Account exists — switch to sign-in mode and try their password.
+      authErr('That email already has an account — signing you in…');
+      setAuthMode('login');
       await window.doLogin();
-    }else{
-      toast('Could not create account: '+msg,'⚠️');
-    }
+    }else if(/Failed to fetch|NetworkError|CORS/i.test(msg)){
+      authErr('Could not reach the server. It may be waking up — wait a few seconds and try again.');
+    }else if(/72 bytes|password/i.test(msg)){
+      authErr('Please choose a shorter password (under 72 characters).');
+    }else authErr(msg||'Could not create your account. Please try again.');
   }
 };
 window.showDiag=async()=>{
