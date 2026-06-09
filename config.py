@@ -1,55 +1,57 @@
-"""Application configuration loaded from environment variables."""
-from functools import lru_cache
-from pydantic_settings import BaseSettings, SettingsConfigDict
+"""Remove the demo 'Office World Cup' sweepstake and its fake players.
+
+Run once in the Render Shell to clean out the seeded demo data while keeping
+any REAL accounts people have registered:
+
+    python -m app.clean_demo
+
+It deletes:
+  - the demo sweepstake (invite code WC26DEMO) and everything attached to it
+  - the demo player accounts (you@example.com, alex@x.com, maria@x.com, ...)
+It does NOT touch real accounts created via the app's Create Account button.
+"""
+import asyncio
+
+from sqlalchemy import delete, select
+
+from app.core.database import AsyncSessionLocal
+from app.models import Sweepstake, User
+
+DEMO_EMAILS = [
+    "you@example.com", "alex@x.com", "maria@x.com", "john@x.com",
+    "sofia@x.com", "tom@x.com", "priya@x.com", "liam@x.com",
+    "noah@x.com", "emma@x.com",
+]
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+async def clean() -> None:
+    async with AsyncSessionLocal() as db:
+        # Delete the demo sweepstake (cascades to participants, teams,
+        # allocations, fixtures, prize tiers, notifications).
+        demo = (
+            await db.execute(
+                select(Sweepstake).where(Sweepstake.invite_code == "WC26DEMO")
+            )
+        ).scalar_one_or_none()
+        if demo:
+            await db.delete(demo)
+            print("Deleted demo sweepstake 'Office World Cup'.")
+        else:
+            print("No demo sweepstake found (already clean).")
 
-    # Core
-    PROJECT_NAME: str = "SweepStake Live"
-    API_V1: str = "/api/v1"
-    ENVIRONMENT: str = "development"
-
-    # Database — Render provides DATABASE_URL. We normalise it to async driver.
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/sweepstake"
-
-    # Auth
-    JWT_SECRET: str = "change-me-in-production"
-    JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-
-    # CORS — comma-separated list of allowed origins (your Vercel domain)
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
-
-    # Football data API (https://www.football-data.org or API-FOOTBALL)
-    FOOTBALL_API_URL: str = "https://api.football-data.org/v4"
-    FOOTBALL_API_KEY: str = ""
-    FOOTBALL_POLL_SECONDS: int = 60  # how often to poll for live results
-
-    # Load demo data (the "Office World Cup" with fake players) on first boot.
-    # Default OFF so real users start with a clean, empty app. Set AUTO_SEED=true
-    # in the environment only if you want the demo data for testing.
-    AUTO_SEED: bool = False
-
-    @property
-    def cors_list(self) -> list[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
-
-    @property
-    def async_database_url(self) -> str:
-        """Render gives postgres://... — convert to async SQLAlchemy URL."""
-        url = self.DATABASE_URL
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return url
+        # Delete the demo user accounts.
+        removed = 0
+        for email in DEMO_EMAILS:
+            u = (
+                await db.execute(select(User).where(User.email == email))
+            ).scalar_one_or_none()
+            if u:
+                await db.delete(u)
+                removed += 1
+        await db.commit()
+        print(f"Removed {removed} demo accounts. Real accounts are untouched.")
+        print("Done — the app now starts clean for real users.")
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
-
-
-settings = get_settings()
+if __name__ == "__main__":
+    asyncio.run(clean())

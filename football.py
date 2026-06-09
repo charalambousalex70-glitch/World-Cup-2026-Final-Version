@@ -28,6 +28,38 @@ STAGE_MAP = {
 }
 STAGE_ORDER = ["Group", "R16", "QF", "SF", "Final", "Winner"]
 
+# The football API uses slightly different country names than our ranked list.
+# Normalise API names → our names so team-stage derivation matches correctly.
+NAME_ALIASES = {
+    "United States": "USA",
+    "USA": "USA",
+    "Bosnia-Herzegovina": "Bosnia & Herzegovina",
+    "Bosnia and Herzegovina": "Bosnia & Herzegovina",
+    "Korea Republic": "South Korea",
+    "Republic of Korea": "South Korea",
+    "South Korea": "South Korea",
+    "IR Iran": "Iran",
+    "Iran": "Iran",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Cote d'Ivoire": "Ivory Coast",
+    "Ivory Coast": "Ivory Coast",
+    "Turkey": "Türkiye",
+    "Türkiye": "Türkiye",
+    "Czech Republic": "Czechia",
+    "Czechia": "Czechia",
+    "Cabo Verde": "Cape Verde",
+    "Cape Verde": "Cape Verde",
+    "Curaçao": "Curacao",
+    "Curacao": "Curacao",
+}
+
+
+def _norm_name(name: str | None) -> str:
+    if not name:
+        return "TBD"
+    return NAME_ALIASES.get(name, name)
+
+
 # Quick flag lookup for common nations (extend as needed).
 FLAGS = {
     "Brazil": "🇧🇷", "France": "🇫🇷", "England": "🏴", "Argentina": "🇦🇷",
@@ -105,8 +137,11 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
     changed: list[Fixture] = []
     for m in matches:
         ext = str(m["id"])
-        home = m["homeTeam"]["name"]
-        away = m["awayTeam"]["name"]
+        # Knockout matches that haven't been decided yet come back with null
+        # teams. Use a placeholder so the NOT NULL column is satisfied; the
+        # poller will fill in real names once earlier rounds finish.
+        home = _norm_name((m.get("homeTeam") or {}).get("name"))
+        away = _norm_name((m.get("awayTeam") or {}).get("name"))
         score = m.get("score", {}).get("fullTime", {})
         hs, as_ = score.get("home"), score.get("away")
         status = m["status"]  # SCHEDULED|TIMED|IN_PLAY|PAUSED|FINISHED
@@ -121,7 +156,7 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
             fx = Fixture(sweepstake_id=sweepstake.id, external_id=ext)
             db.add(fx)
             changed.append(fx)
-        elif (fx.home_score, fx.away_score, fx.status) != (hs, as_, norm_status):
+        elif (fx.home_score, fx.away_score, fx.status, fx.home_team, fx.away_team) != (hs, as_, norm_status, home, away):
             changed.append(fx)
 
         fx.home_team, fx.away_team = home, away
