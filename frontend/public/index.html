@@ -264,6 +264,7 @@ function renderAuth(){
     <button id="primarybtn" class="btn gold" style="margin-top:18px" onclick="submitAuth()">Sign In</button>
     <p class="mut" style="margin-top:20px;font-size:12px"><a href="#" onclick="showDiag();return false" style="color:var(--gold)">backend settings 🔧</a></p>
   </div>`;
+  prewarmBackend();
 }
 let authMode='login';
 window.setAuthMode=(m)=>{
@@ -281,6 +282,13 @@ function authErr(msg){
   if(msg){el.textContent=msg;el.style.display='block';}else{el.style.display='none';}
 }
 window.submitAuth=()=>{ authMode==='register'?doRegister():doLogin(); };
+
+/* Pre-warm: ping /health when the sign-in screen loads so the server starts
+   waking up while the user types — usually ready by the time they submit. */
+function prewarmBackend(){
+  if(!window.__API_URL__)return;
+  fetch(`${window.__API_URL__}/health`).catch(()=>{});
+}
 window.doLogin=()=>{auth=true;view='home';render();setTimeout(()=>toast('Welcome back!','👋'),300)};
 
 /* ---------------- TOP / TABS ---------------- */
@@ -648,12 +656,61 @@ window.setApiUrl=(u)=>{
   setTimeout(()=>location.reload(),700);
 };
 
-async function apiReq(path,{method='GET',body,auth=true}={}){
+/* Friendly full-screen "waking up the server" overlay. Free Render services
+   sleep after ~15 min idle and take 30-60s to wake; this makes that invisible
+   to users instead of showing a scary error. */
+function showWaking(show,attempt){
+  let el=document.getElementById('wakeover');
+  if(show){
+    if(!el){
+      el=document.createElement('div');el.id='wakeover';
+      el.style.cssText='position:fixed;inset:0;z-index:300;display:grid;place-items:center;background:rgba(5,8,18,.82);backdrop-filter:blur(6px);text-align:center;padding:30px';
+      document.body.appendChild(el);
+    }
+    el.innerHTML=`<div style="max-width:300px">
+      <div class="ball" style="width:54px;height:54px;margin:0 auto 18px;animation:spin 1.2s linear infinite"></div>
+      <div style="font-family:'Anton';font-size:22px;letter-spacing:.5px">WAKING UP THE SERVER</div>
+      <p style="color:#aeb9d6;font-size:13px;margin-top:8px">The free server naps when idle. This first request takes up to a minute — hang tight…${attempt?`<br><span style="opacity:.6">attempt ${attempt}</span>`:''}</p>
+    </div>`;
+  }else if(el){el.remove();}
+}
+
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+
+async function apiReq(path,{method='GET',body,auth=true,retries=4}={}){
   const h={'Content-Type':'application/json'};
   if(auth&&JWT)h.Authorization=`Bearer ${JWT}`;
-  const r=await fetch(`${API()}${path}`,{method,headers:h,body:body?JSON.stringify(body):undefined});
-  if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch{}throw new Error(m)}
-  return r.status===204?null:r.json();
+  let lastErr;
+  for(let attempt=1;attempt<=retries;attempt++){
+    try{
+      // 70s timeout — long enough for a cold Render wake-up.
+      const ctrl=new AbortController();
+      const timer=setTimeout(()=>ctrl.abort(),70000);
+      const r=await fetch(`${API()}${path}`,{method,headers:h,
+        body:body?JSON.stringify(body):undefined,signal:ctrl.signal});
+      clearTimeout(timer);
+      showWaking(false);
+      if(!r.ok){
+        // Real HTTP error (4xx/5xx) — don't retry; surface it.
+        let m=r.statusText;try{m=(await r.json()).detail||m}catch{}
+        throw new Error(m);
+      }
+      return r.status===204?null:r.json();
+    }catch(e){
+      lastErr=e;
+      const networkish=/Failed to fetch|NetworkError|aborted|AbortError/i.test(e.message||e.name||'');
+      // Only retry network/timeout failures (likely a sleeping server),
+      // not real HTTP errors like 401/409.
+      if(networkish && attempt<retries){
+        showWaking(true,attempt+1);
+        await sleep(2500*attempt); // backoff: 2.5s, 5s, 7.5s
+        continue;
+      }
+      showWaking(false);
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 function applyLeaderboard(rows){
   players.length=0; alloc.length=0; stages.length=0;
