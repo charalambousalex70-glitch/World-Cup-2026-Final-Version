@@ -84,10 +84,14 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         return []
 
     url = f"{settings.FOOTBALL_API_URL}/competitions/{sweepstake.competition_code}/matches"
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url, headers=_headers())
-        r.raise_for_status()
-        matches = r.json().get("matches", [])
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(url, headers=_headers())
+            r.raise_for_status()
+            matches = r.json().get("matches", [])
+    except Exception:
+        # Slow/failed/rate-limited API: skip this cycle quietly.
+        return []
 
     existing = {
         f.external_id: f
