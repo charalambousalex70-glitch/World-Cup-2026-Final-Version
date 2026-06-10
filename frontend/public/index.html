@@ -675,7 +675,7 @@ function vHome(s){
     <div class="between"><div>
       <h2 style="font-size:26px;line-height:1">${sweep.tour||'World Cup 2026'}</h2>
       <div class="mut" style="font-size:13px;margin-top:3px">${sweep.name}</div></div>
-      <div class="chip">👥 ${players.length} players</div></div>
+      <div class="chip">👥 ${players.length}${(CUR_SWEEP&&CUR_SWEEP.max_participants)?' / '+CUR_SWEEP.max_participants:''} players</div></div>
 
     <div class="hero">
       <div class="label" style="color:#cdd6ee">Total Prize Pool</div>
@@ -1022,6 +1022,11 @@ function vAdmin(s){
   }
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:13px;padding-top:4px">
     <h2 style="font-size:24px">Admin Panel</h2>
+    <div class="card" style="text-align:center">
+      <div class="mono" style="font-size:26px;font-weight:700">${players.length}<span class="mut" style="font-size:16px"> / ${(CUR_SWEEP&&CUR_SWEEP.max_participants)||players.length}</span></div>
+      <div class="label" style="margin-top:2px">Players joined / spots</div>
+      ${(CUR_SWEEP&&CUR_SWEEP.max_participants>players.length)?`<div class="mut" style="font-size:12px;margin-top:4px">${CUR_SWEEP.max_participants-players.length} spots still open · share code <b class="gold">${sweep.code}</b></div>`:'<div class="mut" style="font-size:12px;margin-top:4px">League is full — raise the limit in settings to add more.</div>'}
+    </div>
     <div class="grid2">
       <div class="card" style="text-align:center"><div class="mono gold" style="font-size:26px;font-weight:700">${sweep.cur}${funds.toLocaleString()}</div><div class="label">Collected</div></div>
       <div class="card" style="text-align:center"><div class="mono" style="font-size:26px;font-weight:700;color:var(--red)">${sweep.cur}${(pool()-funds).toLocaleString()}</div><div class="label">Outstanding</div></div>
@@ -1539,7 +1544,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v5 · max-players</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v6 · spots-display</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
