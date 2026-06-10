@@ -1,42 +1,39 @@
-"""Async SQLAlchemy engine, session factory and declarative base."""
-from collections.abc import AsyncGenerator
+"""WebSocket connection manager.
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+Clients connect to a room identified by sweepstake_id. The backend broadcasts
+JSON events (leaderboard updates, score changes, eliminations) to every socket
+in that room so the UI updates without polling.
+"""
+import json
+from collections import defaultdict
 
-from app.core.config import settings
-
-engine = create_async_engine(
-    settings.async_database_url,
-    echo=False,
-    # NOTE: pool_pre_ping doesn't play well with the async asyncpg driver — its
-    # connection "ping" runs outside the async context and raises MissingGreenlet.
-    # Instead we recycle connections periodically, which keeps the pool healthy
-    # (important on hosts that drop idle connections) without the broken ping.
-    pool_recycle=280,        # recycle connections older than ~4.5 min
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-)
-
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+from fastapi import WebSocket
 
 
-class Base(DeclarativeBase):
-    """Declarative base for all ORM models."""
+class ConnectionManager:
+    def __init__(self) -> None:
+        # sweepstake_id (str) -> set of sockets
+        self._rooms: dict[str, set[WebSocket]] = defaultdict(set)
 
+    async def connect(self, room: str, ws: WebSocket) -> None:
+        await ws.accept()
+        self._rooms[room].add(ws)
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency that yields a database session."""
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            # Roll back any partial work. Guarded so a double-rollback (e.g. a
-            # handler already rolled back) can never raise a second error.
+    def disconnect(self, room: str, ws: WebSocket) -> None:
+        self._rooms[room].discard(ws)
+        if not self._rooms[room]:
+            self._rooms.pop(room, None)
+
+    async def broadcast(self, room: str, event: str, payload: dict) -> None:
+        message = json.dumps({"event": event, "data": payload}, default=str)
+        dead: list[WebSocket] = []
+        for ws in self._rooms.get(room, set()):
             try:
-                await session.rollback()
+                await ws.send_text(message)
             except Exception:
-                pass
-            raise
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(room, ws)
+
+
+manager = ConnectionManager()

@@ -1,119 +1,46 @@
-# API Reference
+# START HERE — SweepStake Live (v3, hardened)
 
-Base URL: `{BACKEND_URL}/api/v1`
-Auth: `Authorization: Bearer <token>` on all routes except register/login.
-Interactive docs (Swagger): `{BACKEND_URL}/docs`
+This version fixes the fragile parts that caused setup pain. Key changes:
 
-## Auth
+1. **Backend URL is now editable on the live site** — no more editing code &
+   redeploying when your Render URL changes. Open the app, tap the **🔧** icon
+   (top bar, or the link on the sign-in screen), paste your backend URL, Save.
+2. **The DEMO/LIVE badge is now honest** — it shows **DEMO** (gold) when not
+   connected and **LIVE** (green) when connected. Tap DEMO to open settings.
+3. **Real error messages** — if it can't connect, the 🔧 panel tells you exactly
+   why (unreachable vs. CORS vs. login rejected) and shows the address to put in
+   CORS_ORIGINS.
+4. **No more cache trap** — the service worker is network-first for the page, so
+   new deploys show up immediately.
+5. **Auto-seed** — the backend loads the demo data itself on first boot. No more
+   running `python -m app.seed` in the Shell by hand.
+6. **CORS auto-allows *.vercel.app** — renaming your Vercel project won't break it.
 
-### POST /auth/register
-```json
-{ "email": "a@b.com", "username": "Alex", "password": "secret123" }
-```
-→ `201` `{ "access_token": "...", "token_type": "bearer", "user": { ... } }`
+## Deploy (fresh)
 
-### POST /auth/login
-```json
-{ "email": "a@b.com", "password": "secret123" }
-```
-→ `200` same `Token` shape. `401` on bad credentials.
+### Backend — Render
+1. New → **Blueprint**, point at this repo. It builds the API + Postgres.
+2. It will ask for `CORS_ORIGINS` — you can leave it blank now (the server also
+   auto-allows any `*.vercel.app` URL). Optionally paste your exact Vercel URL.
+3. Wait for **Live**. Visit `<your-api>/health` → `{"status":"ok",...}`.
+   The demo data seeds itself automatically.
 
-### GET /auth/me
-→ current `User`.
+### Frontend — Vercel
+1. Add New → Project → this repo.
+2. **Root Directory: `frontend`**. Framework: Other. Deploy.
+3. Open the site, click **🔧**, paste your Render API URL, **Save & Reconnect**.
+4. Sign in: **you@example.com / demo1234** → should show **LIVE**.
 
-## Sweepstakes
+That's it. The 🔧 step replaces all the code-editing/redeploy/cache-clearing
+that used to be required.
 
-### POST /sweepstakes
-Create. Creator auto-joins as a paid participant. Prize percentages must sum to 100.
-```json
-{
-  "name": "Office World Cup",
-  "tournament_name": "World Cup 2026",
-  "competition_code": "WC",
-  "entry_fee": 20,
-  "currency": "EUR",
-  "max_participants": 10,
-  "prize_tiers": [
-    { "rank": 1, "percentage": 60 },
-    { "rank": 2, "percentage": 25 },
-    { "rank": 3, "percentage": 15 }
-  ]
-}
-```
-→ `201` full `Sweepstake` (with `invite_code`, `prize_pool`, participants, teams).
+## Quick fixes
+- **Stuck on DEMO?** Tap 🔧. The health line tells you if the backend is
+  reachable. If it says CORS, the panel shows the exact address to add to
+  `CORS_ORIGINS` on the Render service.
+- **Always test the real URL** (`https://....vercel.app`), never a downloaded
+  `index.html` from your computer.
 
-### GET /sweepstakes
-→ all sweepstakes the user administers or has joined.
-
-### GET /sweepstakes/{id}
-→ one sweepstake, fully expanded.
-
-### DELETE /sweepstakes/{id}
-Admin only. → `204`.
-
-### POST /sweepstakes/join
-```json
-{ "invite_code": "WC26DEMO" }
-```
-→ `200` the joined sweepstake. `404` invalid code, `409` full or draw finalized.
-Broadcasts `participant_joined`.
-
-## Draw
-
-### POST /sweepstakes/{id}/draw
-Admin only. Runs a fair CSPRNG allocation (re-runnable until approved).
-→ `200` list of `{ participant_id, participant_name, team_id, team_name, flag_emoji }`.
-Broadcasts `draw_completed`. `409` if already approved.
-
-### POST /sweepstakes/{id}/draw/approve
-Admin only. Locks the draw permanently, sets status `active`.
-→ `200` sweepstake. Broadcasts `draw_approved`.
-
-## Live data
-
-### GET /sweepstakes/{id}/leaderboard
-→ ranked rows:
-```json
-[{ "rank":1, "participant_name":"You", "team_name":"Brazil",
-   "flag_emoji":"🇧🇷", "stage":"Winner", "points":120,
-   "eliminated":false, "potential_payout":120.0 }]
-```
-
-### GET /sweepstakes/{id}/fixtures
-→ list of fixtures.
-
-### POST /sweepstakes/{id}/sync
-Admin only. Forces an immediate football-API sync. Broadcasts
-`leaderboard_updated` if anything changed.
-
-### GET /sweepstakes/{id}/notifications
-→ this user's notifications for the sweepstake, newest first.
-
-## Payments
-
-### PATCH /sweepstakes/{id}/participants/{pid}/payment
-Admin only.
-```json
-{ "has_paid": true }
-```
-→ `200` updated sweepstake.
-
-## WebSocket
-
-`WS {BACKEND_URL}/ws/sweepstakes/{id}`
-
-On connect you receive `{ "event": "connected", "data": { "room": "<id>" } }`.
-Send any text (e.g. `"ping"`) as keepalive. Events pushed by the server:
-
-| Event | Payload | Meaning |
-|-------|---------|---------|
-| `participant_joined` | `{ username, count }` | someone joined |
-| `draw_completed` | `{ allocations: [...] }` | draw run (pre-approval) |
-| `draw_approved` | `{}` | draw locked |
-| `leaderboard_updated` | `{ leaderboard: [...] }` | scores changed |
-| `fixtures_updated` | `{ count }` | N fixtures changed |
-
-## Errors
-
-Standard FastAPI `{ "detail": "..." }` with appropriate status codes
-(`401` auth, `403` not admin, `404` missing, `409` conflict, `422` validation).
+## Security
+Rotate the secrets that were visible during setup: regenerate the
+football-data.org key, set a fresh random `JWT_SECRET`, rotate the DB password.
