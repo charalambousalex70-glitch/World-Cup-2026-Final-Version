@@ -1,42 +1,56 @@
-# FINAL UPDATE — what to change in your GitHub repo
+/* SweepStake Live service worker (v3 — network-first for the app shell).
+ * KEY FIX: index.html and the app are fetched network-first, so a new deploy
+ * shows up immediately (no more "I changed it but the old version loads").
+ * Only static assets fall back to cache; API writes/sockets always bypass.
+ */
+const CACHE = "sweepstake-v10";
 
-Replace these 8 files with the versions in this package. Everything else in
-your repo stays as-is. After committing, Render and Vercel auto-redeploy.
+self.addEventListener("install", () => self.skipWaiting());
 
-## Files to update
+self.addEventListener("activate", (e) => {
+  e.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
+});
 
-| # | File in your repo | What changed |
-|---|-------------------|--------------|
-| 1 | `frontend/public/index.html` | Editable backend URL (🔧 panel), honest LIVE/DEMO badge, real error messages |
-| 2 | `frontend/public/sw.js` | Network-first service worker — new deploys show up instantly (fixes the cache trap) |
-| 3 | `frontend/public/manifest.webmanifest` | Icons embedded as data — no missing-file 404s |
-| 4 | `backend/app/main.py` | Auto-seed on first boot; CORS auto-allows `*.vercel.app`; friendly root route |
-| 5 | `backend/app/core/config.py` | Adds the `AUTO_SEED` setting |
-| 6 | `backend/runtime.txt` | Pins Python 3.12 (prevents the pydantic-core build failure) |
-| 7 | `render.yaml` | Pins `PYTHON_VERSION=3.12.7` for fresh Blueprint deploys |
-| 8 | `START-HERE.md` | Updated instructions for the new flow |
+self.addEventListener("fetch", (e) => {
+  const { request } = e;
+  const url = new URL(request.url);
+  if (request.method !== "GET" || url.protocol.startsWith("ws")) return;
 
-## How to update (GitHub web)
+  // API calls always go to network (never serve stale data for writes/auth).
+  if (url.pathname.startsWith("/api/")) return;
 
-For each file: open it in your repo → click the pencil (Edit) → select all →
-paste the new contents → Commit. Or upload the whole folder from the zip and
-let GitHub overwrite.
+  // HTML / navigation: NETWORK-FIRST so new deploys appear instantly.
+  const isHTML =
+    request.mode === "navigate" ||
+    url.pathname === "/" ||
+    url.pathname.endsWith(".html");
+  if (isHTML) {
+    e.respondWith(
+      fetch(request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(request, copy));
+          return res;
+        })
+        .catch(() => caches.match(request).then((c) => c || caches.match("/")))
+    );
+    return;
+  }
 
-## After it redeploys — the ONE thing you do on the live site
-
-1. Open your Vercel site (the real `https://...vercel.app`, not a downloaded file).
-2. Click the **🔧** icon (top bar) or the **backend settings** link on sign-in.
-3. Paste your Render backend URL (e.g. `https://sweepstake-api-0myw.onrender.com`).
-4. Click **Save & Reconnect**.
-5. Sign in: `you@example.com` / `demo1234`.
-
-The badge should turn green and say **LIVE**. If it stays gold/**DEMO**, the 🔧
-panel now shows a health check and the exact reason (unreachable / CORS / login),
-plus the address to add to `CORS_ORIGINS` on your Render service.
-
-## Notes
-- The backend now auto-allows any `*.vercel.app` origin, so you likely won't
-  need to touch `CORS_ORIGINS` at all anymore.
-- The backend auto-seeds the demo data on first boot — no Shell step needed.
-- Rotate your secrets (JWT_SECRET, football API key, DB password) since they
-  appeared in screenshots during setup.
+  // Other static assets: cache-first for speed, network fallback.
+  e.respondWith(
+    caches.match(request).then(
+      (cached) =>
+        cached ||
+        fetch(request).then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(request, copy).catch(() => {}));
+          return res;
+        }).catch(() => cached)
+    )
+  );
+});

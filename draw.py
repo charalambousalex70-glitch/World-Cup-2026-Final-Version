@@ -150,6 +150,7 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         )
         stage = STAGE_MAP.get(m.get("stage", ""), "Group")
         kickoff = _parse_dt(m.get("utcDate"))
+        venue = m.get("venue") or None
 
         fx = existing.get(ext)
         if fx is None:
@@ -163,6 +164,7 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         fx.home_score, fx.away_score = hs, as_
         fx.status, fx.stage = norm_status, stage
         fx.kickoff = kickoff
+        fx.venue = venue
 
     await db.flush()
     if changed:
