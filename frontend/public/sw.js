@@ -3,7 +3,7 @@
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
  */
-const CACHE = "sweepstake-v9";
+const CACHE = "sweepstake-v10";
 
 self.addEventListener("install", () => self.skipWaiting());
 

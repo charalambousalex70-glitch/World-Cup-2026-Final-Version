@@ -40,7 +40,7 @@ h1,h2,h3,.disp{font-family:'Anton',sans-serif;font-weight:400;letter-spacing:.5p
 .mut{color:var(--mut)}
 
 /* Top bar */
-.top{display:flex;align-items:center;gap:12px;padding:18px 16px 12px;position:sticky;top:0;z-index:30;
+.top{display:flex;align-items:center;gap:12px;padding:calc(18px + env(safe-area-inset-top)) 16px 12px;position:sticky;top:0;z-index:30;
   background:linear-gradient(var(--navy) 70%, transparent);backdrop-filter:blur(4px)}
 .logo{display:flex;align-items:center;gap:9px;font-family:'Anton';font-size:21px;letter-spacing:.5px}
 .ball{width:30px;height:30px;border-radius:50%;background:
@@ -154,7 +154,7 @@ input::placeholder{color:var(--mut)}
 .codebox{font-family:'JetBrains Mono';font-weight:700;letter-spacing:4px;font-size:24px;text-align:center;
   padding:16px;border:2px dashed var(--gold);border-radius:14px;color:var(--gold);background:rgba(255,200,61,.06)}
 /* auth */
-.auth{flex:1;display:flex;flex-direction:column;justify-content:center;padding:32px 26px;text-align:center}
+.auth{flex:1;display:flex;flex-direction:column;justify-content:center;padding:calc(32px + env(safe-area-inset-top)) 26px calc(32px + env(safe-area-inset-bottom));text-align:center}
 .auth .ball{width:64px;height:64px;margin:0 auto 18px}
 .auth h1{font-size:38px;line-height:.95}
 .notif{display:flex;gap:11px;padding:13px;border-radius:13px;background:var(--card);border:1px solid var(--line);margin-bottom:9px;align-items:flex-start}
@@ -233,6 +233,29 @@ const RANKED_POOL=[
  ['Uzbekistan','🇺🇿'],['Ghana','🇬🇭'],['Czechia','🇨🇿'],['Bosnia & Herzegovina','🇧🇦'],['South Korea','🇰🇷'],['Egypt','🇪🇬']
 ].map(([name,flag])=>({name,flag}));
 window.RANKED_POOL=RANKED_POOL;
+
+/* ISO 3166-1 alpha-2 codes for flag images (flagcdn.com) — these render
+   identically on every device, unlike emoji flags which fail on Windows. */
+const FLAG_CODES={
+ 'Spain':'es','France':'fr','England':'gb-eng','Brazil':'br','Portugal':'pt','Argentina':'ar',
+ 'Germany':'de','Netherlands':'nl','Belgium':'be','Norway':'no','Japan':'jp','Colombia':'co',
+ 'USA':'us','Mexico':'mx','Uruguay':'uy','Morocco':'ma','Switzerland':'ch','Croatia':'hr',
+ 'Türkiye':'tr','Turkey':'tr','Ecuador':'ec','Senegal':'sn','Paraguay':'py','Canada':'ca',
+ 'Austria':'at','Sweden':'se','Ivory Coast':'ci','Algeria':'dz','Scotland':'gb-sct','Australia':'au',
+ 'Cape Verde':'cv','Curacao':'cw','DR Congo':'cd','Haiti':'ht','Iran':'ir','Iraq':'iq',
+ 'Jordan':'jo','New Zealand':'nz','Panama':'pa','Qatar':'qa','Saudi Arabia':'sa','South Africa':'za',
+ 'Tunisia':'tn','Uzbekistan':'uz','Ghana':'gh','Czechia':'cz','Bosnia & Herzegovina':'ba',
+ 'South Korea':'kr','Egypt':'eg'
+};
+/* Render a flag consistently on all platforms: an <img> from flagcdn with the
+   emoji as alt/fallback. Falls back to the emoji (or a generic flag) for
+   unknown teams like TBD. */
+function flagImg(name, size=22){
+  const code=FLAG_CODES[name];
+  const emoji=(window.FIXTURE_FLAGS&&FIXTURE_FLAGS[name])||'🏳️';
+  if(!code)return `<span style="font-size:${size}px">${name==='TBD'?'⏳':emoji}</span>`;
+  return `<img src="https://flagcdn.com/${Math.ceil(size*1.5)}x${Math.ceil(size*1.125)}/${code}.png" alt="${emoji}" width="${size*1.35|0}" height="${size|0}" style="border-radius:3px;object-fit:cover;vertical-align:middle;box-shadow:0 0 0 1px rgba(255,255,255,.08)" onerror="this.outerHTML='<span style=\\'font-size:${size}px\\'>${emoji}</span>'">`;
+}
 let MY_ID=null;  // logged-in user's id (to detect league admin)
 
 /* ---------------- HELPERS ---------------- */
@@ -513,7 +536,10 @@ function leagueCard(l){
       </div>
       <div style="text-align:right">
         <div class="tag ${l.status==='active'?'live':'live'}" style="margin-bottom:4px">${status}</div>
-        <div class="mut" style="font-size:18px">›</div>
+        <div class="row" style="justify-content:flex-end;gap:8px">
+          ${isAdmin?`<span style="font-size:14px;color:var(--red);padding:4px" title="Delete league" onclick="event.stopPropagation();confirmDeleteLeagueById('${l.id}','${(l.name||'').replace(/'/g,"\\'")}')">🗑️</span>`:''}
+          <div class="mut" style="font-size:18px">›</div>
+        </div>
       </div>
     </div>
   </div>`;
@@ -593,7 +619,7 @@ function teamRow(t,info,canEdit){
     : '';
   return `<div class="lb" style="margin-bottom:0;${dim}">
     ${rankBadge}
-    <div class="flag" style="font-size:20px">${t.flag||'🏳️'}</div>
+    <div class="flag">${flagImg(t.name,20)}</div>
     <div style="flex:1;font-weight:600;font-size:15px">${t.name}</div>
     ${badge}
     ${btn}
@@ -661,7 +687,7 @@ function vHome(s){
           <span class="tag ${myStage==='Out'?'out':(myStage==='Winner'?'win':'live')}">${myStage||'—'}</span>
         </div>
         <div class="row">
-          <div class="flag" style="font-size:26px">${meTeam.e}</div>
+          <div class="flag">${flagImg(meTeam.n,26)}</div>
           <div style="flex:1"><div style="font-size:19px;font-weight:700">${meTeam.n}</div>
             <div class="mut" style="font-size:13px">You're currently <b class="gold">#${me}</b> of ${players.length}</div></div>
           <div style="text-align:right"><div class="mono gold" style="font-size:26px;font-weight:700">#${me}</div></div>
@@ -759,11 +785,47 @@ function lbRow(x,i){
     <div class="pos">${i+1}</div>
     <div class="avatar" style="background:${x.p.col}">${x.p.av}</div>
     <div style="flex:1"><div style="font-weight:700;font-size:15px">${x.p.name}${me?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
-      <div class="mut row" style="gap:5px;font-size:13px"><span>${t.e}</span>${t.n}</div></div>
+      <div class="mut row" style="gap:5px;font-size:13px">${flagImg(t.n,15)}${t.n}</div></div>
     ${tag}
     <div class="mono gold" style="font-weight:700;min-width:34px;text-align:right">${pts}</div>
   </div>`;
 }
+/* ---------------- LEAGUE CHAT ---------------- */
+let COMMENTS=null;
+async function loadComments(){
+  if(!LIVE||!CUR_SWEEP)return;
+  try{COMMENTS=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/comments`)||[];}
+  catch(e){COMMENTS=[];}
+}
+window.sendComment=async()=>{
+  const inp=$('#chatinput'); const text=((inp||{}).value||'').trim();
+  if(!text)return;
+  if(!LIVE){toast('Chat needs a live connection','🔧');return;}
+  inp.value='';
+  try{
+    const c=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/comments`,{method:'POST',body:{body:text}});
+    if(!Array.isArray(COMMENTS))COMMENTS=[];
+    if(!COMMENTS.find(x=>x.id===c.id))COMMENTS.push(c);
+    renderChatList();
+  }catch(e){toast('Could not send: '+(e.message||'error'),'⚠️');if(inp)inp.value=text;}
+};
+function chatRowHTML(c){
+  const mine=c.username===(MY_NAME||'');
+  return `<div style="display:flex;gap:8px;margin-bottom:10px;${mine?'flex-direction:row-reverse;text-align:right':''}">
+    <div class="avatar" style="width:28px;height:28px;font-size:11px;flex-shrink:0;background:${c.avatar_color||'#888'}">${(c.username||'P').slice(0,2).toUpperCase()}</div>
+    <div style="max-width:75%">
+      <div class="mut" style="font-size:10px;margin-bottom:2px">${c.username||'Player'} · ${timeAgo(c.created_at)}</div>
+      <div style="background:${mine?'rgba(255,200,61,.14)':'var(--card)'};border:1px solid var(--line);border-radius:12px;padding:8px 11px;font-size:14px;word-break:break-word">${(c.body||'').replace(/</g,'&lt;')}</div>
+    </div></div>`;
+}
+function renderChatList(){
+  const el=$('#chatlist'); if(!el)return;
+  el.innerHTML=(Array.isArray(COMMENTS)&&COMMENTS.length)
+    ? COMMENTS.map(chatRowHTML).join('')
+    : '<div class="mut" style="text-align:center;font-size:13px;padding:14px">No messages yet — say hi! 👋</div>';
+  el.scrollTop=el.scrollHeight;
+}
+
 function vBoard(s){
   const r=ranked();
   const drawn = alloc.length>0 && teams.length>0; // a draw has happened
@@ -786,7 +848,19 @@ function vBoard(s){
       <div class="between mut"><span>Final</span><span class="mono">90 pts</span></div>
       <div class="between"><span class="gold">Champion</span><span class="mono gold">120 pts</span></div>
     </div>
+
+    <div class="between" style="margin-top:6px"><div class="label">League Chat</div><span class="mut" style="font-size:11px">everyone in this league</span></div>
+    <div class="card" style="padding:12px">
+      <div id="chatlist" style="max-height:300px;overflow-y:auto;margin-bottom:10px"></div>
+      <div class="row" style="gap:8px">
+        <input id="chatinput" placeholder="Say something…" maxlength="500" style="flex:1"
+          onkeydown="if(event.key==='Enter')sendComment()">
+        <button class="btn gold" style="width:auto;padding:11px 16px" onclick="sendComment()">➤</button>
+      </div>
+    </div>
   </div>`;
+  renderChatList();
+  if(LIVE && COMMENTS===null){ loadComments().then(renderChatList); }
 }
 
 /* ---------------- LIVE DRAW ---------------- */
@@ -836,7 +910,7 @@ function vDraw(s){
 function drawItem(d){
   return `<div class="lb"><div class="avatar" style="background:${d.player.col}">${d.player.av}</div>
     <div style="flex:1;font-weight:700;font-size:15px">${d.player.name}</div>
-    <div class="row" style="gap:7px"><span style="font-size:20px">${d.team.e}</span><b>${d.team.n}</b></div></div>`;
+    <div class="row" style="gap:7px">${flagImg(d.team.n,20)}<b>${d.team.n}</b></div></div>`;
 }
 window.resetDraw=()=>{drawn=[];drawResult=null;render()};
 
@@ -986,7 +1060,7 @@ function fxList(f){
     list=LIVE_FIXTURES.map(x=>({a:x.home_team,b:x.away_team,sa:x.home_score??'–',sb:x.away_score??'–',
       status:x.status,
       st:x.status==='LIVE'?'LIVE':(x.status==='FINISHED'?'FT':'•'),
-      live:x.status==='LIVE',stage:x.stage||'',kickoff:x.kickoff}));
+      live:x.status==='LIVE',stage:x.stage||'',kickoff:x.kickoff,venue:x.venue||''}));
   }else{
     list=fixtures.map(x=>({...x,status:x.live?'LIVE':(x.st==='FT'?'FINISHED':'SCHEDULED'),kickoff:x.kickoff}));
   }
@@ -1007,10 +1081,10 @@ function fxList(f){
     const meta = x.live ? `<span class="gold">${x.st} ●</span>`
       : (x.status==='FINISHED' ? 'FT' : (kickoffLabel(x.kickoff)||'TBD'));
     return `<div class="fx">
-      <div class="fxteam"><span style="font-size:22px">${flagFor(x.a)}</span>${x.a}</div>
+      <div class="fxteam">${flagImg(x.a,20)}${x.a}</div>
       <div style="text-align:center"><div class="score ${x.live?'lv':''}">${x.status==='SCHEDULED'?'vs':x.sa+' – '+x.sb}</div>
-        <div class="mut" style="font-size:10px;margin-top:4px">${meta}${x.stage?' · '+x.stage:''}</div></div>
-      <div class="fxteam r">${x.b}<span style="font-size:22px">${flagFor(x.b)}</span></div>
+        <div class="mut" style="font-size:10px;margin-top:4px">${meta}${x.stage?' · '+x.stage:''}</div>${x.venue?`<div class="mut" style="font-size:9px;margin-top:2px">📍 ${x.venue}</div>`:''}</div>
+      <div class="fxteam r">${x.b}${flagImg(x.b,20)}</div>
     </div>`;
   }).join('');
 }
@@ -1043,10 +1117,11 @@ function vAdmin(s){
       <button class="btn" onclick="openInvite()">🔗 Invite Link</button>
     </div>
     <div class="between" style="margin-top:4px"><div class="label">Payment Tracking</div><span class="mut" style="font-size:12px">${paid.filter(Boolean).length}/${players.length} paid · tap to toggle</span></div>
-    ${players.length?players.map((p,i)=>`<div class="lb" style="margin-bottom:0;cursor:pointer" onclick="togglePaid(${i})">
+    ${players.length?players.map((p,i)=>`<div class="lb" style="margin-bottom:0">
       <div class="avatar" style="background:${p.col}">${p.av}</div>
-      <div style="flex:1;font-weight:700;font-size:15px">${p.name}${p.name===(MY_NAME||'')?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
-      <span class="badge ${paid[i]?'b-paid':'b-due'}">${paid[i]?'✓ PAID':'DUE'}</span>
+      <div style="flex:1;font-weight:700;font-size:15px;cursor:pointer" onclick="togglePaid(${i})">${p.name}${p.name===(MY_NAME||'')?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
+      <span class="badge ${paid[i]?'b-paid':'b-due'}" style="cursor:pointer" onclick="togglePaid(${i})">${paid[i]?'✓ PAID':'DUE'}</span>
+      ${p.name!==(MY_NAME||'')?`<button class="iconbtn" style="color:var(--red);font-size:15px" title="Remove ${p.name}" onclick="confirmRemove(${i})">✕</button>`:''}
     </div>`).join(''):'<div class="card mut" style="text-align:center;font-size:13px">No one has joined yet.</div>'}
     <div class="card" style="margin-top:6px">
       <div class="label" style="margin-bottom:10px">Prize Distribution</div>
@@ -1054,8 +1129,78 @@ function vAdmin(s){
         <span>${['🥇 Winner','🥈 Runner-up','🥉 Third'][i]||('#'+(i+1))} · ${p}%</span>
         <b class="gold mono">${sweep.cur}${(pool()*p/100).toLocaleString()}</b></div>`).join('')}
     </div>
+    <button class="btn ghost" style="color:var(--red);margin-top:10px" onclick="confirmDeleteLeague()">🗑️ Delete This League</button>
   </div>`;
 }
+
+/* ---- Remove participant (admin, double-confirmed) ---- */
+window.confirmRemove=(i)=>{
+  const p=players[i]; if(!p)return;
+  modal(`<h2 style="font-size:20px;margin-bottom:8px">Remove ${p.name}?</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:16px;line-height:1.5">They'll be removed from this league and their spot opens up. They can re-join with the invite code. ${CUR_SWEEP&&CUR_SWEEP.draw_approved?'<b style="color:var(--red)">The draw is locked — reset the draw first.</b>':''}</p>
+    <button class="btn gold" id="rmbtn" style="color:var(--red)" onclick="doRemove(${i})">Yes, remove ${p.name}</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Cancel</button>`);
+};
+window.doRemove=async(i)=>{
+  const p=players[i]; if(!p)return;
+  const btn=$('#rmbtn'); if(btn){btn.textContent='Removing…';btn.style.opacity=.6;}
+  try{
+    const s=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/participants/${p.id}`,{method:'DELETE'});
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    if(s&&s.id){applySweepstake(s);render();}
+    await refreshSweepstake();
+    toast(`${p.name} removed`,'✕');
+  }catch(e){
+    if(btn){btn.textContent='Yes, remove';btn.style.opacity=1;}
+    toast('Could not remove: '+(e.message||'error'),'⚠️');
+  }
+};
+
+/* ---- Delete league (admin, type-to-confirm) ---- */
+window.confirmDeleteLeagueById=(id,name)=>{
+  modal(`<h2 style="font-size:20px;margin-bottom:8px">Delete “${name}”?</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:12px;line-height:1.5">This permanently deletes the league for <b>everyone</b>. This cannot be undone.</p>
+    <div class="label" style="margin-bottom:6px">Type <b style="color:var(--red)">DELETE</b> to confirm</div>
+    <input id="delconf" placeholder="DELETE" autocapitalize="characters" spellcheck="false">
+    <button class="btn gold" id="delbtn" style="color:var(--red);margin-top:14px" onclick="doDeleteLeagueById('${id}')">Permanently delete league</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Keep league</button>`);
+};
+window.doDeleteLeagueById=async(id)=>{
+  const typed=(($('#delconf')||{}).value||'').trim().toUpperCase();
+  if(typed!=='DELETE'){toast('Type DELETE to confirm','✏️');return;}
+  const btn=$('#delbtn'); if(btn){btn.textContent='Deleting…';btn.style.opacity=.6;}
+  try{
+    await apiReq(`/sweepstakes/${id}`,{method:'DELETE'});
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    toast('League deleted','🗑️');
+    await loadMyLeagues(); render();
+  }catch(e){
+    if(btn){btn.textContent='Permanently delete league';btn.style.opacity=1;}
+    toast('Could not delete: '+(e.message||'error'),'⚠️');
+  }
+};
+window.confirmDeleteLeague=()=>{
+  modal(`<h2 style="font-size:20px;margin-bottom:8px">Delete “${sweep.name}”?</h2>
+    <p class="mut" style="font-size:13px;margin-bottom:12px;line-height:1.5">This permanently deletes the league for <b>everyone</b> — all players, the draw, and history. This cannot be undone.</p>
+    <div class="label" style="margin-bottom:6px">Type <b style="color:var(--red)">DELETE</b> to confirm</div>
+    <input id="delconf" placeholder="DELETE" autocapitalize="characters" spellcheck="false">
+    <button class="btn gold" id="delbtn" style="color:var(--red);margin-top:14px" onclick="doDeleteLeague()">Permanently delete league</button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Keep league</button>`);
+};
+window.doDeleteLeague=async()=>{
+  const typed=(($('#delconf')||{}).value||'').trim().toUpperCase();
+  if(typed!=='DELETE'){toast('Type DELETE to confirm','✏️');return;}
+  const btn=$('#delbtn'); if(btn){btn.textContent='Deleting…';btn.style.opacity=.6;}
+  try{
+    await apiReq(`/sweepstakes/${CUR_SWEEP.id}`,{method:'DELETE'});
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    toast('League deleted','🗑️');
+    await goToMyLeagues();
+  }catch(e){
+    if(btn){btn.textContent='Permanently delete league';btn.style.opacity=1;}
+    toast('Could not delete: '+(e.message||'error'),'⚠️');
+  }
+};
 window.togglePaid=async(i)=>{
   const p=players[i]; if(!p)return;
   if(!LIVE){paid[i]=!paid[i];render();return;}   // demo mode
@@ -1391,6 +1536,10 @@ function startLive(sid){
         refreshSweepstake();   // re-fetch real participant list → count updates
       }
       else if(['draw_approved','draw_completed','draw_reset'].includes(m.event)){refreshSweepstake();}
+      else if(m.event==='comment_added'){
+        if(!Array.isArray(COMMENTS))COMMENTS=[];
+        if(m.data&&m.data.id&&!COMMENTS.find(x=>x.id===m.data.id)){COMMENTS.push(m.data);renderChatList();}
+      }
       else if(m.event==='fixtures_updated'){
         loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());});
       }
@@ -1408,7 +1557,7 @@ let MY_LEAGUES=[];        // all sweepstakes the user is in (summary list)
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
   players.length=0; alloc.length=0; stages.length=0; paid.length=0;
-  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null;
+  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null;
 }
 
 /* Populate the local players[] from the sweepstake's REAL participants so the
@@ -1553,7 +1702,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v9 · home-stats</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v10 · pwa-flags-venue-chat</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
