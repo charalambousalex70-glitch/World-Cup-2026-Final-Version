@@ -402,6 +402,10 @@ let FX_BASE=null;        // the base currency the rates are relative to
 let PREF_CUR=null;       // user's preferred display currency
 try{PREF_CUR=localStorage.getItem('ssl_cur')||null}catch{}
 
+/* Your personal stake in a league = its entry fee (what YOU put in), not the
+   whole pot. Summed across leagues this is your total outlay. */
+function leagueStake(l){ return (l.entry_fee||0); }
+/* The full pot of a league = stake × everyone in it (used on league cards). */
 function leaguePool(l){ return (l.entry_fee||0)*((l.participants||[]).length); }
 
 /* Fetch live FX rates (free, no key). Falls back to null on failure, in which
@@ -437,7 +441,7 @@ function vLeagues(s){
   }
   // Group pools by currency.
   const byCur={};
-  list.forEach(l=>{ const c=l.currency||'EUR'; byCur[c]=(byCur[c]||0)+leaguePool(l); });
+  list.forEach(l=>{ const c=l.currency||'EUR'; byCur[c]=(byCur[c]||0)+leagueStake(l); });
   const currencies=Object.keys(byCur);
   const display=PREF_CUR || (currencies[0]||'EUR');
 
@@ -464,9 +468,9 @@ function vLeagues(s){
     </div>
 
     ${list.length?`<div class="hero" style="text-align:center">
-      <div class="label" style="color:#cdd6ee">Total Invested${multiCur?` <span style="cursor:pointer;text-decoration:underline" onclick="cycleCurrency()">(${display} ▾)</span>`:''}</div>
+      <div class="label" style="color:#cdd6ee">My Total Stake${multiCur?` <span style="cursor:pointer;text-decoration:underline" onclick="cycleCurrency()">(${display} ▾)</span>`:''}</div>
       ${totalLine}
-      <div class="mut" style="font-size:12px;margin-top:6px">across ${list.length} ${list.length===1?'league':'leagues'}</div>
+      <div class="mut" style="font-size:12px;margin-top:6px">your entry across ${list.length} ${list.length===1?'league':'leagues'}</div>
     </div>`:''}
 
     <div class="between"><div class="label">My Leagues</div><span class="mut" style="font-size:12px">${list.length} ${list.length===1?'league':'leagues'}</span></div>
@@ -1098,11 +1102,14 @@ window.saveLeague=async()=>{
   if(!LIVE){toast('Connect to the backend first','🔧');return;}
   const btn=$('#el_save'); if(btn){btn.textContent='Saving…';btn.style.opacity=.6;}
   try{
-    await apiReq(`/sweepstakes/${CUR_SWEEP.id}`,{method:'PATCH',
+    const updated=await apiReq(`/sweepstakes/${CUR_SWEEP.id}`,{method:'PATCH',
       body:{name,currency,entry_fee,max_participants}});
     const m=document.querySelector('.modal'); if(m)m.remove();
+    // Apply the server's returned object immediately so the new values show at
+    // once, then do a full refresh in the background to sync everything else.
+    if(updated&&updated.id){ applySweepstake(updated); render(); }
     await refreshSweepstake();
-    toast('League updated ✅','✅');
+    toast(`League updated ✅ (max now ${max_participants})`,'✅');
   }catch(e){
     if(btn){btn.textContent='Save Changes';btn.style.opacity=1;}
     toast('Could not save: '+(e.message||'error'),'⚠️');
@@ -1544,7 +1551,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v6 · spots-display</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v8 · max-fix</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
