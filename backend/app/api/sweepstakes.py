@@ -418,6 +418,16 @@ async def post_comment(sid: uuid.UUID, body: CommentCreate,
         raise HTTPException(422, "Comment cannot be empty")
     c = Comment(sweepstake_id=sid, user_id=user.id, body=text[:500])
     db.add(c)
+    # Notify every OTHER participant so they see it in Recent Activity even if
+    # they're not online right now.
+    parts = (
+        await db.execute(select(Participant.user_id).where(Participant.sweepstake_id == sid))
+    ).scalars().all()
+    excerpt = text[:80] + ("…" if len(text) > 80 else "")
+    for uid in parts:
+        if uid != user.id:
+            db.add(Notification(user_id=uid, sweepstake_id=sid, icon="💬",
+                                title=f"{user.username} in {sweep.name}", body=excerpt))
     await db.flush()
     out = CommentOut(
         id=c.id, body=c.body, created_at=c.created_at,

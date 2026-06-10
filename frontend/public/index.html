@@ -254,7 +254,10 @@ function flagImg(name, size=22){
   const code=FLAG_CODES[name];
   const emoji=(window.FIXTURE_FLAGS&&FIXTURE_FLAGS[name])||'🏳️';
   if(!code)return `<span style="font-size:${size}px">${name==='TBD'?'⏳':emoji}</span>`;
-  return `<img src="https://flagcdn.com/${Math.ceil(size*1.5)}x${Math.ceil(size*1.125)}/${code}.png" alt="${emoji}" width="${size*1.35|0}" height="${size|0}" style="border-radius:3px;object-fit:cover;vertical-align:middle;box-shadow:0 0 0 1px rgba(255,255,255,.08)" onerror="this.outerHTML='<span style=\\'font-size:${size}px\\'>${emoji}</span>'">`;
+  // flagcdn only serves fixed endpoints; w40/w80 exist for every country.
+  const src=size>26?`https://flagcdn.com/w80/${code}.png`:`https://flagcdn.com/w40/${code}.png`;
+  const w=Math.round(size*1.33), h=Math.round(size);
+  return `<img src="${src}" alt="" width="${w}" height="${h}" loading="lazy" style="border-radius:3px;object-fit:cover;vertical-align:middle;box-shadow:0 0 0 1px rgba(255,255,255,.08)" data-emoji="${emoji}" onerror="var s=document.createElement('span');s.style.fontSize='${size}px';s.textContent=this.dataset.emoji;this.replaceWith(s)">`;
 }
 let MY_ID=null;  // logged-in user's id (to detect league admin)
 
@@ -840,6 +843,24 @@ window.reactTo=async(cid,emoji)=>{
     if(i>=0){COMMENTS[i]=c;renderChatList();}
   }catch(e){toast('Reaction failed','⚠️');}
 };
+function notifyChat(c){
+  if(!c||c.username===(MY_NAME||''))return;   // don't notify yourself
+  // In-app toast when you're not already looking at the chat.
+  if(view!=='board')toast(`💬 ${c.username}: ${(c.body||'').slice(0,60)}`,'💬');
+  // Browser notification when the tab is hidden and permission granted.
+  try{
+    if(document.hidden && 'Notification' in window && Notification.permission==='granted'){
+      new Notification(`💬 ${c.username} · ${sweep.name||'League chat'}`,{body:(c.body||'').slice(0,120)});
+    }
+  }catch{}
+}
+window.toggleChatNotifs=async()=>{
+  if(!('Notification' in window)){toast('Notifications not supported on this browser','ℹ️');return;}
+  if(Notification.permission==='granted'){toast('Notifications are on — manage them in browser settings','🔔');return;}
+  const perm=await Notification.requestPermission();
+  toast(perm==='granted'?'Chat notifications on! 🔔':'Notifications blocked — enable in browser settings','🔔');
+  render();
+};
 function renderChatList(){
   const el=$('#chatlist'); if(!el)return;
   el.innerHTML=(Array.isArray(COMMENTS)&&COMMENTS.length)
@@ -871,7 +892,7 @@ function vBoard(s){
       <div class="between"><span class="gold">Champion</span><span class="mono gold">120 pts</span></div>
     </div>
 
-    <div class="between" style="margin-top:6px"><div class="label">League Chat</div><span class="mut" style="font-size:11px">everyone in this league</span></div>
+    <div class="between" style="margin-top:6px"><div class="label">League Chat</div><span style="font-size:13px;cursor:pointer" onclick="toggleChatNotifs()" title="Enable notifications">🔔 <span class="mut" style="font-size:11px">notify me</span></span></div>
     <div class="card" style="padding:12px">
       <div id="chatlist" style="max-height:300px;overflow-y:auto;margin-bottom:10px"></div>
       <div class="row" style="gap:6px;margin-bottom:8px;flex-wrap:wrap">
@@ -1602,6 +1623,7 @@ function startLive(sid){
       else if(m.event==='comment_added'){
         if(!Array.isArray(COMMENTS))COMMENTS=[];
         if(m.data&&m.data.id&&!COMMENTS.find(x=>x.id===m.data.id)){COMMENTS.push(m.data);renderChatList();}
+        notifyChat(m.data);
       }
       else if(m.event==='fixtures_updated'){
         loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());});
@@ -1765,7 +1787,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v11 · reactions-matchinfo</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v12 · chat-notify-flagfix</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
