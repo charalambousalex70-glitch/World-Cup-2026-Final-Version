@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI):
                 "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS referee VARCHAR(120)",
                 "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS detail TEXT",
                 "ALTER TABLE comments ADD COLUMN IF NOT EXISTS reactions TEXT",
+                "ALTER TABLE comments ALTER COLUMN user_id DROP NOT NULL",
             ):
                 await conn.execute(text(ddl))
         except Exception:

@@ -91,6 +91,39 @@ async def _poll_once() -> None:
                     {"leaderboard": [r.model_dump() for r in board]},
                 )
 
+                # ---- Goal Bot: post score updates into the league chat ----
+                from app.models import Comment
+                name_to_owner = {}
+                for user_id, tname in parts:
+                    if tname: name_to_owner.setdefault(tname, [])
+                for p2 in full.participants:
+                    if p2.allocation and p2.allocation.team:
+                        name_to_owner.setdefault(p2.allocation.team.name, []).append(
+                            p2.user.username if p2.user else "someone")
+                for fxd in changed_data:
+                    hs, as_ = fxd.get("hs"), fxd.get("as_")
+                    if hs is None and as_ is None:
+                        continue  # schedule-only change, nothing to announce
+                    owners = []
+                    for t in (fxd["home"], fxd["away"]):
+                        for o in name_to_owner.get(t, []):
+                            owners.append(f"{o}'s {t}")
+                    suffix = (" — " + ", ".join(owners[:3])) if owners else ""
+                    if fxd["status"] == "FINISHED":
+                        msg = f"🏁 FT: {fxd['home']} {hs}–{as_} {fxd['away']}{suffix}"
+                    elif fxd["status"] == "LIVE":
+                        msg = f"⚽ {fxd['home']} {hs}–{as_} {fxd['away']} (LIVE){suffix}"
+                    else:
+                        continue
+                    bot = Comment(sweepstake_id=sweep_id, user_id=None, body=msg[:500])
+                    db.add(bot)
+                    await db.flush()
+                    await manager.broadcast(str(sweep_id), "comment_added", {
+                        "id": str(bot.id), "body": bot.body,
+                        "created_at": bot.created_at.isoformat() if bot.created_at else None,
+                        "username": "⚽ Goal Bot", "avatar_color": "#ffc83d", "reactions": {},
+                    })
+
                 # Build notifications from the captured plain data.
                 for fxd in changed_data:
                     if fxd["status"] != "FINISHED":

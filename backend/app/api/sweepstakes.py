@@ -11,11 +11,11 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models import (
-    Allocation, Comment, Notification, Participant, PrizeTier, Sweepstake, Team, User,
+    Allocation, Comment, Notification, Participant, Prediction, PrizeTier, Sweepstake, Team, User,
 )
 from app.schemas import (
     AllocationOut, CommentCreate, CommentOut, FixtureOut, JoinRequest,
-    LeaderboardRow, NotificationOut, PaymentUpdate, SweepstakeCreate, SweepstakeOut,
+    LeaderboardRow, NotificationOut, PaymentUpdate, PredBoardRow, PredictionIn, PredictionOut, SweepstakeCreate, SweepstakeOut,
 )
 from app.services import football
 from app.services.draw import DrawError, approve_draw, reset_draw, run_draw
@@ -399,8 +399,8 @@ async def list_comments(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         except Exception: rx = {}
         out.append(CommentOut(
             id=c.id, body=c.body, created_at=c.created_at,
-            username=c.user.username if c.user else "Player",
-            avatar_color=c.user.avatar_color if c.user else "#888",
+            username=c.user.username if c.user else "⚽ Goal Bot",
+            avatar_color=c.user.avatar_color if c.user else "#ffc83d",
             reactions=rx,
         ))
     return out
@@ -464,4 +464,75 @@ async def react_comment(sid: uuid.UUID, cid: uuid.UUID, body: dict,
                      avatar_color=cu.avatar_color if cu else "#888",
                      reactions=rx)
     await manager.broadcast(str(sid), "comment_updated", out.model_dump(mode="json"))
+    return out
+
+
+# ---------- Predictions (side game: 5 exact / 2 result / 0) ----------
+def _pred_points(ph, pa, h, a):
+    if h is None or a is None: return 0
+    if ph == h and pa == a: return 5
+    sign = lambda d: (d > 0) - (d < 0)   # 1 home win, 0 draw, -1 away win
+    if sign(ph - pa) == sign(h - a): return 2
+    return 0
+
+
+@router.post("/{sid}/predictions", response_model=PredictionOut)
+async def save_prediction(sid: uuid.UUID, body: PredictionIn,
+                          db: AsyncSession = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    fx = await db.get(Fixture, body.fixture_id)
+    if not fx or fx.sweepstake_id != sid:
+        raise HTTPException(404, "Match not found")
+    if fx.status != "SCHEDULED":
+        raise HTTPException(409, "Predictions lock at kick-off")
+    row = (
+        await db.execute(select(Prediction).where(
+            Prediction.user_id == user.id, Prediction.fixture_id == body.fixture_id))
+    ).scalar_one_or_none()
+    if row:
+        row.home_pred, row.away_pred = body.home, body.away
+    else:
+        db.add(Prediction(sweepstake_id=sid, user_id=user.id,
+                          fixture_id=body.fixture_id, home_pred=body.home, away_pred=body.away))
+    await db.flush()
+    return PredictionOut(fixture_id=body.fixture_id, home=body.home, away=body.away)
+
+
+@router.get("/{sid}/predictions", response_model=list[PredictionOut])
+async def my_predictions(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    rows = (
+        await db.execute(select(Prediction).where(
+            Prediction.sweepstake_id == sid, Prediction.user_id == user.id))
+    ).scalars().all()
+    return [PredictionOut(fixture_id=r.fixture_id, home=r.home_pred, away=r.away_pred) for r in rows]
+
+
+@router.get("/{sid}/predictions/board", response_model=list[PredBoardRow])
+async def predictions_board(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                            user: User = Depends(get_current_user)):
+    preds = (
+        await db.execute(select(Prediction).where(Prediction.sweepstake_id == sid))
+    ).scalars().all()
+    fixtures = {f.id: f for f in (
+        await db.execute(select(Fixture).where(Fixture.sweepstake_id == sid))
+    ).scalars().all()}
+    users = {u.id: u for u in (
+        await db.execute(select(User).join(Participant, Participant.user_id == User.id)
+                         .where(Participant.sweepstake_id == sid))
+    ).scalars().all()}
+    agg: dict = {}
+    for pr in preds:
+        fx = fixtures.get(pr.fixture_id)
+        if not fx or fx.status != "FINISHED": continue
+        pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score)
+        a = agg.setdefault(pr.user_id, {"points": 0, "exact": 0, "results": 0})
+        a["points"] += pts
+        if pts == 5: a["exact"] += 1
+        elif pts == 2: a["results"] += 1
+    out = []
+    for uid, u in users.items():
+        a = agg.get(uid, {"points": 0, "exact": 0, "results": 0})
+        out.append(PredBoardRow(username=u.username, avatar_color=u.avatar_color, **a))
+    out.sort(key=lambda r: (-r.points, -r.exact, r.username.lower()))
     return out

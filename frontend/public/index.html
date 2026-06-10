@@ -722,6 +722,7 @@ function vHome(s){
 
     ${teamCard}
 
+    ${todayDigestHTML()}
     <div class="card">
       <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700">${prog}%</span></div>
       <div class="bar"><i style="width:${prog}%"></i></div>
@@ -734,7 +735,7 @@ function vHome(s){
     </div>
 
     <div class="between"><div class="label">Top Standings</div><span class="gold" style="font-size:13px;font-weight:700;cursor:pointer" onclick="view='board';render()">View all →</span></div>
-    ${r.length?r.slice(0,3).map((x,i)=>lbRow(x,i)).join('')
+    ${r.length?r.slice(0,3).map((x,i)=>lbRow(x,i,r)).join('')
       :'<div class="card mut" style="text-align:center;font-size:13px">No standings yet — run the draw to assign teams.</div>'}
 
     <div class="between" style="margin-top:4px"><div class="label">Recent Activity</div></div>
@@ -777,8 +778,20 @@ async function loadActivity(){
 }
 
 /* ---------------- LEADERBOARD ---------------- */
-function lbRow(x,i){
+function badgesFor(x,i,r){
+  const out=[];
+  if(i===0&&r.length>1)out.push(['👑','Top of the league']);
+  if(i===r.length-1&&r.length>2)out.push(['🥄','Wooden Spoon — bottom of the table']);
+  if(x.ti!=null&&teams[x.ti]){
+    const rank=(window.RANKED_POOL||[]).findIndex(t=>t.name===teams[x.ti].n)+1;
+    if(rank===1)out.push(['🍀','Lucky draw — got the favourite']);
+    if(rank>=20&&x.stage&&x.stage!=='Out'&&x.stage!=='Group')out.push(['🦾','Giant Killer — underdog still alive']);
+  }
+  return out.map(([e,t])=>`<span title="${t}" style="font-size:13px">${e}</span>`).join('');
+}
+function lbRow(x,i,allRanked){
   const t=T(x.ti), me=x.p.name===(MY_NAME||'You');
+  const badges=badgesFor(x,i,allRanked||[]);
   const tag = x.stage==='Out'?'<span class="tag out">OUT</span>'
     : x.stage==='Winner'?'<span class="tag win">WINNER</span>'
     : x.stage?`<span class="tag live">${x.stage}</span>`
@@ -787,12 +800,56 @@ function lbRow(x,i){
   return `<div class="lb ${i<3?'r'+(i+1):''} ${me?'me':''}">
     <div class="pos">${i+1}</div>
     <div class="avatar" style="background:${x.p.col}">${x.p.av}</div>
-    <div style="flex:1"><div style="font-weight:700;font-size:15px">${x.p.name}${me?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
+    <div style="flex:1"><div style="font-weight:700;font-size:15px">${x.p.name}${me?' <span class="gold" style="font-size:11px">(you)</span>':''} ${badges}</div>
       <div class="mut row" style="gap:5px;font-size:13px">${flagImg(t.n,15)}${t.n}</div></div>
     ${tag}
     <div class="mono gold" style="font-weight:700;min-width:34px;text-align:right">${pts}</div>
   </div>`;
 }
+function todayDigestHTML(){
+  if(!Array.isArray(LIVE_FIXTURES))return '';
+  const today=new Date().toDateString();
+  const todays=LIVE_FIXTURES.filter(f=>f.kickoff&&new Date(f.kickoff).toDateString()===today);
+  if(!todays.length)return '';
+  const ownerOf=(team)=>{const i=teams.findIndex(t=>t.n===team);if(i<0)return null;
+    const pi=alloc.findIndex(a=>a===i);return pi>=0?players[pi]?.name:null;};
+  const rows=todays.slice(0,4).map(f=>{
+    const oh=ownerOf(f.home_team),oa=ownerOf(f.away_team);
+    const who=[oh&&`${oh}'s ${f.home_team}`,oa&&`${oa}'s ${f.away_team}`].filter(Boolean).join(' vs ');
+    const time=f.status==='LIVE'?'<span class="gold">● LIVE</span>':(f.status==='FINISHED'?'FT':new Date(f.kickoff).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
+    return `<div class="between" style="font-size:13px;margin-bottom:7px">
+      <span>${flagImg(f.home_team,14)} ${f.home_team} v ${f.away_team} ${flagImg(f.away_team,14)}</span>
+      <span class="mono mut">${time}</span></div>${who?`<div class="mut" style="font-size:11px;margin:-4px 0 7px 2px">⚡ ${who}</div>`:''}`;
+  }).join('');
+  return `<div class="card glow"><div class="label" style="margin-bottom:10px">📅 Today at the World Cup</div>${rows}</div>`;
+}
+/* ---------------- PREDICTIONS (side game: 5 exact / 2 result) ---------------- */
+let MY_PREDS=null, PRED_BOARD=null;
+async function loadPredictions(){
+  if(!LIVE||!CUR_SWEEP)return;
+  try{
+    const rows=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/predictions`)||[];
+    MY_PREDS={}; rows.forEach(r=>MY_PREDS[r.fixture_id]={home:r.home,away:r.away});
+  }catch(e){MY_PREDS={};}
+}
+async function loadPredBoard(){
+  if(!LIVE||!CUR_SWEEP)return;
+  try{PRED_BOARD=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/predictions/board`)||[];}
+  catch(e){PRED_BOARD=[];}
+}
+window.savePrediction=async(fid)=>{
+  const h=+($('#ph')||{}).value, a=+($('#pa')||{}).value;
+  if(isNaN(h)||isNaN(a)||h<0||a<0){toast('Enter both scores','✏️');return;}
+  try{
+    await apiReq(`/sweepstakes/${CUR_SWEEP.id}/predictions`,{method:'POST',
+      body:{fixture_id:fid,home:h,away:a}});
+    if(!MY_PREDS)MY_PREDS={};
+    MY_PREDS[fid]={home:h,away:a};
+    toast(`Prediction saved: ${h}–${a} 🔮`,'✅');
+    const m=document.querySelector('.modal'); if(m)m.remove();
+  }catch(e){toast('Could not save: '+(e.message||'error'),'⚠️');}
+};
+
 /* ---------------- LEAGUE CHAT ---------------- */
 let COMMENTS=null;
 async function loadComments(){
@@ -869,6 +926,26 @@ function renderChatList(){
   el.scrollTop=el.scrollHeight;
 }
 
+function vPredBoard(s){
+  s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
+    <h2 style="font-size:24px">Leaderboard</h2>
+    <div class="seg"><button onclick="window.BOARD_MODE='main';render()">Main</button><button class="on">🔮 Predictions</button></div>
+    <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">Side game, no prize — predict any match before kick-off (tap a match in Matches). <b class="gold">5 pts</b> exact score · <b class="gold">2 pts</b> right result.</span></div>
+    <div id="predboard" class="stagger">${predBoardHTML()}</div>
+  </div>`;
+  if(LIVE && PRED_BOARD===null){ loadPredBoard().then(()=>{const el=$('#predboard');if(el)el.innerHTML=predBoardHTML();}); }
+}
+function predBoardHTML(){
+  if(!Array.isArray(PRED_BOARD))return '<div class="card mut" style="text-align:center;font-size:13px">Loading…</div>';
+  if(!PRED_BOARD.length)return '<div class="card mut" style="text-align:center;font-size:13px">No predictions yet — be the first! Tap a match in the Matches tab.</div>';
+  return PRED_BOARD.map((r,i)=>`<div class="lb ${i<3?'r'+(i+1):''} ${r.username===(MY_NAME||'')?'me':''}" style="margin-bottom:9px">
+    <div class="pos">${i+1}</div>
+    <div class="avatar" style="background:${r.avatar_color}">${(r.username||'P').slice(0,2).toUpperCase()}</div>
+    <div style="flex:1"><div style="font-weight:700;font-size:15px">${r.username}${r.username===(MY_NAME||'')?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
+      <div class="mut" style="font-size:11px">${r.exact} exact · ${r.results} results</div></div>
+    <div class="mono gold" style="font-weight:700">${r.points}</div>
+  </div>`).join('');
+}
 function vBoard(s){
   const r=ranked();
   const drawn = alloc.length>0 && teams.length>0; // a draw has happened
@@ -878,10 +955,12 @@ function vBoard(s){
       <p class="mut" style="font-size:14px">No one's joined yet. Share your invite code to get people in.</p></div>`;
     return;
   }
+  if(window.BOARD_MODE==='pred'){ vPredBoard(s); return; }
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
     <h2 style="font-size:24px">Leaderboard</h2>
+    <div class="seg"><button class="on" onclick="window.BOARD_MODE='main';render()">Main</button><button onclick="window.BOARD_MODE='pred';render()">🔮 Predictions</button></div>
     <div class="card" style="padding:13px"><div class="between"><span class="mut" style="font-size:13px">${drawn?'Live ranking · updates as results come in':`${players.length} joined · teams assigned at the draw`}</span><span class="live"><span class="dot"></span>${drawn?'LIVE':players.length+' IN'}</span></div></div>
-    <div class="stagger">${r.map((x,i)=>lbRow(x,i)).join('')}</div>
+    <div class="stagger">${r.map((x,i)=>lbRow(x,i,r)).join('')}</div>
     <div class="card" style="font-size:12px">
       <div class="label" style="margin-bottom:8px">Scoring</div>
       <div class="between mut"><span>Group stage</span><span class="mono">10 pts</span></div>
@@ -1112,6 +1191,16 @@ window.openMatch=(fid)=>{
       <div class="label" style="margin-bottom:8px">Goals</div>
       ${goalsRows}
     </div>
+    ${x.status==='SCHEDULED'?`<div class="card" style="margin-bottom:10px">
+      <div class="label" style="margin-bottom:8px">🔮 Your Prediction <span class="mut" style="text-transform:none;font-weight:400">(5 pts exact · 2 pts result)</span></div>
+      <div class="row" style="gap:10px;justify-content:center;align-items:center">
+        <input id="ph" type="number" min="0" max="20" style="width:64px;text-align:center" value="${(MY_PREDS&&MY_PREDS[x.id])?MY_PREDS[x.id].home:''}" placeholder="0">
+        <span class="mono" style="font-size:18px">–</span>
+        <input id="pa" type="number" min="0" max="20" style="width:64px;text-align:center" value="${(MY_PREDS&&MY_PREDS[x.id])?MY_PREDS[x.id].away:''}" placeholder="0">
+        <button class="btn gold" style="width:auto;padding:10px 16px" onclick="savePrediction('${x.id}')">Save</button>
+      </div>
+      ${(MY_PREDS&&MY_PREDS[x.id])?`<div class="mut" style="font-size:11px;text-align:center;margin-top:6px">Saved: ${MY_PREDS[x.id].home}–${MY_PREDS[x.id].away} · you can change it until kick-off</div>`:'<div class="mut" style="font-size:11px;text-align:center;margin-top:6px">Locks at kick-off</div>'}
+    </div>`:''}
     <p class="mut" style="font-size:11px;line-height:1.5">Lineups, possession and shot stats aren't provided by the free football data feed, and TV listings vary by country — check your local guide for the broadcast channel.</p>
     <button class="btn ghost" style="margin-top:10px" onclick="document.querySelector('.modal').remove()">Close</button>`);
 };
@@ -1626,7 +1715,7 @@ function startLive(sid){
         notifyChat(m.data);
       }
       else if(m.event==='fixtures_updated'){
-        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());});
+        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());PRED_BOARD=null;});
       }
     }catch{}};
     ws.onclose=()=>{if(alive)setTimeout(open,1500)};
@@ -1642,7 +1731,7 @@ let MY_LEAGUES=[];        // all sweepstakes the user is in (summary list)
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
   players.length=0; alloc.length=0; stages.length=0; paid.length=0;
-  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null;
+  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null; MY_PREDS=null; PRED_BOARD=null;
 }
 
 /* Populate the local players[] from the sweepstake's REAL participants so the
@@ -1683,6 +1772,7 @@ async function selectLeague(id){
   await refreshLive();
   await loadFixtures();
   await loadActivity();
+  loadPredictions();
   view='home'; render();
 }
 window.openLeague=async(id)=>{ try{await selectLeague(id);}catch(e){toast('Could not open league','⚠️');} };
@@ -1787,7 +1877,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v12 · chat-notify-flagfix</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v13 · predictions-badges-digest-bot</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);

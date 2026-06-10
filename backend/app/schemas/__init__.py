@@ -167,3 +167,23 @@ class CommentOut(BaseModel):
 
 class CommentCreate(BaseModel):
     body: str = Field(min_length=1, max_length=500)
+
+
+class PredictionIn(BaseModel):
+    fixture_id: uuid.UUID
+    home: int = Field(ge=0, le=20)
+    away: int = Field(ge=0, le=20)
+
+
+class PredictionOut(BaseModel):
+    fixture_id: uuid.UUID
+    home: int
+    away: int
+
+
+class PredBoardRow(BaseModel):
+    username: str
+    avatar_color: str = "#888"
+    points: int = 0
+    exact: int = 0
+    results: int = 0
