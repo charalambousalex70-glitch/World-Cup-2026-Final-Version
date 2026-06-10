@@ -22,6 +22,15 @@ async def lifespan(app: FastAPI):
     # Create tables if they don't exist.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Lightweight idempotent migration for columns added after launch.
+        # ADD COLUMN IF NOT EXISTS is safe to run on every boot.
+        try:
+            from sqlalchemy import text
+            await conn.execute(text(
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS venue VARCHAR(160)"
+            ))
+        except Exception:
+            pass  # never block startup on a migration nicety
 
     # Auto-seed demo data on first boot so the app is usable immediately
     # (no manual Shell step). Safe to run every boot: it no-ops if data exists.
