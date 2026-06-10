@@ -132,6 +132,7 @@ class FixtureOut(BaseModel):
     away_score: int | None
     status: str
     stage: str
+    venue: str | None = None
     kickoff: datetime | None = None
     kickoff: datetime | None
 
@@ -150,3 +151,16 @@ class NotificationOut(BaseModel):
     body: str | None
     read: bool
     created_at: datetime
+
+
+class CommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    body: str
+    created_at: datetime
+    username: str = ""
+    avatar_color: str = "#888"
+
+
+class CommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=500)
