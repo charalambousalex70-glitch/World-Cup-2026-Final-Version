@@ -1,194 +1,55 @@
-"""SQLAlchemy ORM models — the full database schema.
-
-Entity overview
----------------
-User           registered account
-Sweepstake     a single competition instance (created by an admin User)
-Participant    a User's membership in a Sweepstake (join + payment + allocation)
-Team           a tournament team (synced from football API per sweepstake's tournament)
-Allocation     the permanent draw result linking a Participant to a Team
-Fixture        a match (synced from football API)
-PrizeTier      a row of the prize distribution (rank + percentage)
-Notification   per-user activity feed item
-"""
-import uuid
-from datetime import datetime, timezone
-
-from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint,
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.core.database import Base
+"""Application configuration loaded from environment variables."""
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def _uuid() -> uuid.UUID:
-    return uuid.uuid4()
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Core
+    PROJECT_NAME: str = "SweepStake Live"
+    API_V1: str = "/api/v1"
+    ENVIRONMENT: str = "development"
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    # Database — Render provides DATABASE_URL. We normalise it to async driver.
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/sweepstake"
 
+    # Auth
+    JWT_SECRET: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
-class User(Base):
-    __tablename__ = "users"
+    # CORS — comma-separated list of allowed origins (your Vercel domain)
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    username: Mapped[str] = mapped_column(String(60), nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    avatar_url: Mapped[str | None] = mapped_column(String(500))
-    avatar_color: Mapped[str] = mapped_column(String(9), default="#ffc83d")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # Football data API (https://www.football-data.org or API-FOOTBALL)
+    FOOTBALL_API_URL: str = "https://api.football-data.org/v4"
+    FOOTBALL_API_KEY: str = ""
+    FOOTBALL_POLL_SECONDS: int = 60  # how often to poll for live results
 
-    sweepstakes: Mapped[list["Sweepstake"]] = relationship(back_populates="admin")
-    participations: Mapped[list["Participant"]] = relationship(back_populates="user")
-
-
-class Sweepstake(Base):
-    __tablename__ = "sweepstakes"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    tournament_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    # external competition id from the football API (e.g. "WC" / 2000)
-    competition_code: Mapped[str | None] = mapped_column(String(40))
-
-    entry_fee: Mapped[float] = mapped_column(Float, default=0)
-    currency: Mapped[str] = mapped_column(String(3), default="EUR")
-    max_participants: Mapped[int] = mapped_column(Integer, default=10)
-
-    invite_code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
-    start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    status: Mapped[str] = mapped_column(String(20), default="open")  # open|drawn|active|finished
-    draw_approved: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-    admin: Mapped["User"] = relationship(back_populates="sweepstakes")
-    participants: Mapped[list["Participant"]] = relationship(
-        back_populates="sweepstake", cascade="all, delete-orphan"
-    )
-    teams: Mapped[list["Team"]] = relationship(
-        back_populates="sweepstake", cascade="all, delete-orphan"
-    )
-    prize_tiers: Mapped[list["PrizeTier"]] = relationship(
-        back_populates="sweepstake", cascade="all, delete-orphan"
-    )
+    # Load demo data (the "Office World Cup" with fake players) on first boot.
+    # Default OFF so real users start with a clean, empty app. Set AUTO_SEED=true
+    # in the environment only if you want the demo data for testing.
+    AUTO_SEED: bool = False
 
     @property
-    def prize_pool(self) -> float:
-        # Guard against the relationship not being loaded (avoids triggering a
-        # lazy DB load during serialization). Returns 0 rather than raising.
-        try:
-            return (self.entry_fee or 0) * len(self.participants)
-        except Exception:
-            return 0.0
+    def cors_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @property
+    def async_database_url(self) -> str:
+        """Render gives postgres://... — convert to async SQLAlchemy URL."""
+        url = self.DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
 
 
-class Participant(Base):
-    __tablename__ = "participants"
-    __table_args__ = (UniqueConstraint("sweepstake_id", "user_id", name="uq_part_user"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    has_paid: Mapped[bool] = mapped_column(Boolean, default=False)
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-    sweepstake: Mapped["Sweepstake"] = relationship(back_populates="participants")
-    user: Mapped["User"] = relationship(back_populates="participations")
-    allocation: Mapped["Allocation | None"] = relationship(
-        back_populates="participant", cascade="all, delete-orphan", uselist=False
-    )
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
 
 
-class Team(Base):
-    __tablename__ = "teams"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
-    )
-    external_id: Mapped[str | None] = mapped_column(String(40))  # football API team id
-    name: Mapped[str] = mapped_column(String(80), nullable=False)
-    flag_emoji: Mapped[str] = mapped_column(String(8), default="🏳️")
-    crest_url: Mapped[str | None] = mapped_column(String(500))
-    # current tournament stage: Group|R16|QF|SF|Final|Winner|Out
-    stage: Mapped[str] = mapped_column(String(12), default="Group")
-    eliminated: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    sweepstake: Mapped["Sweepstake"] = relationship(back_populates="teams")
-    allocation: Mapped["Allocation | None"] = relationship(
-        back_populates="team", uselist=False
-    )
-
-
-class Allocation(Base):
-    """The permanent, immutable result of the draw."""
-    __tablename__ = "allocations"
-    __table_args__ = (
-        UniqueConstraint("sweepstake_id", "team_id", name="uq_alloc_team"),
-        UniqueConstraint("participant_id", name="uq_alloc_participant"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
-    )
-    participant_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("participants.id", ondelete="CASCADE")
-    )
-    team_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-    participant: Mapped["Participant"] = relationship(back_populates="allocation")
-    team: Mapped["Team"] = relationship(back_populates="allocation")
-
-
-class Fixture(Base):
-    __tablename__ = "fixtures"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
-    )
-    external_id: Mapped[str | None] = mapped_column(String(40), index=True)
-    home_team: Mapped[str] = mapped_column(String(80))
-    away_team: Mapped[str] = mapped_column(String(80))
-    home_score: Mapped[int | None] = mapped_column(Integer)
-    away_score: Mapped[int | None] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(20), default="SCHEDULED")  # SCHEDULED|LIVE|FINISHED
-    stage: Mapped[str] = mapped_column(String(20), default="GROUP")
-    kickoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-
-class PrizeTier(Base):
-    __tablename__ = "prize_tiers"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
-    )
-    rank: Mapped[int] = mapped_column(Integer)        # 1 = winner, 2 = runner-up...
-    percentage: Mapped[float] = mapped_column(Float)  # e.g. 60.0
-
-    sweepstake: Mapped["Sweepstake"] = relationship(back_populates="prize_tiers")
-
-
-class Notification(Base):
-    __tablename__ = "notifications"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    sweepstake_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sweepstakes.id", ondelete="CASCADE"))
-    icon: Mapped[str] = mapped_column(String(8), default="🔔")
-    title: Mapped[str] = mapped_column(String(160))
-    body: Mapped[str | None] = mapped_column(Text)
-    read: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+settings = get_settings()

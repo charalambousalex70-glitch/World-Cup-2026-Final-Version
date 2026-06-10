@@ -1,102 +1,194 @@
-"""Authentication routes: register, login, current user.
+"""SQLAlchemy ORM models — the full database schema.
 
-Hardened for real-world, company-wide use:
-- Emails are normalised (lowercased + trimmed) so "Alex@X.com " and
-  "alex@x.com" are the same account. This prevents the most common
-  "I registered but can't log in" complaint.
-- Duplicate-email registration is caught both by a pre-check AND by handling
-  the database unique-constraint error, so a race between two simultaneous
-  signups returns a clean 409 instead of a 500.
-- Usernames are trimmed; blank usernames fall back to the email prefix.
+Entity overview
+---------------
+User           registered account
+Sweepstake     a single competition instance (created by an admin User)
+Participant    a User's membership in a Sweepstake (join + payment + allocation)
+Team           a tournament team (synced from football API per sweepstake's tournament)
+Allocation     the permanent draw result linking a Participant to a Team
+Fixture        a match (synced from football API)
+PrizeTier      a row of the prize distribution (rank + percentage)
+Notification   per-user activity feed item
 """
-import secrets
+import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import (
+    Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.api.deps import get_current_user
-from app.core.database import get_db
-from app.core.security import create_access_token, hash_password, verify_password
-from app.models import User
-from app.schemas import Token, UserCreate, UserLogin, UserOut
-
-router = APIRouter(prefix="/auth", tags=["auth"])
-
-_COLORS = ["#ffc83d", "#4d8dff", "#2fe28a", "#ff5b6e", "#b07bff", "#ff9d4d", "#4de2d6"]
+from app.core.database import Base
 
 
-def _normalise_email(email: str) -> str:
-    return (email or "").strip().lower()
+def _uuid() -> uuid.UUID:
+    return uuid.uuid4()
 
 
-async def _find_user_by_email(db: AsyncSession, email: str) -> User | None:
-    # Case-insensitive lookup so historical mixed-case rows still match.
-    return (
-        await db.execute(select(User).where(func.lower(User.email) == email))
-    ).scalar_one_or_none()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-@router.post("/register", response_model=Token, status_code=201)
-async def register(body: UserCreate, db: AsyncSession = Depends(get_db)):
-    email = _normalise_email(body.email)
-    username = (body.username or "").strip() or email.split("@")[0]
+class User(Base):
+    __tablename__ = "users"
 
-    if not email or "@" not in email:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Enter a valid email address")
-    if len(body.password) < 6:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Password must be at least 6 characters")
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    username: Mapped[str] = mapped_column(String(60), nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    avatar_url: Mapped[str | None] = mapped_column(String(500))
+    avatar_color: Mapped[str] = mapped_column(String(9), default="#ffc83d")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
-    if await _find_user_by_email(db, email):
-        raise HTTPException(status.HTTP_409_CONFLICT, "That email is already registered. Try signing in.")
+    sweepstakes: Mapped[list["Sweepstake"]] = relationship(back_populates="admin")
+    participations: Mapped[list["Participant"]] = relationship(back_populates="user")
 
-    user = User(
-        email=email,
-        username=username,
-        hashed_password=hash_password(body.password),
-        avatar_color=secrets.choice(_COLORS),
+
+class Sweepstake(Base):
+    __tablename__ = "sweepstakes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    tournament_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # external competition id from the football API (e.g. "WC" / 2000)
+    competition_code: Mapped[str | None] = mapped_column(String(40))
+
+    entry_fee: Mapped[float] = mapped_column(Float, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="EUR")
+    max_participants: Mapped[int] = mapped_column(Integer, default=10)
+
+    invite_code: Mapped[str] = mapped_column(String(16), unique=True, index=True, nullable=False)
+    start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open|drawn|active|finished
+    draw_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    admin: Mapped["User"] = relationship(back_populates="sweepstakes")
+    participants: Mapped[list["Participant"]] = relationship(
+        back_populates="sweepstake", cascade="all, delete-orphan"
     )
-    db.add(user)
-    try:
-        await db.flush()
-    except IntegrityError:
-        # Another request created the same email between our check and flush.
-        await db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "That email is already registered. Try signing in.")
+    teams: Mapped[list["Team"]] = relationship(
+        back_populates="sweepstake", cascade="all, delete-orphan"
+    )
+    prize_tiers: Mapped[list["PrizeTier"]] = relationship(
+        back_populates="sweepstake", cascade="all, delete-orphan"
+    )
 
-    token = create_access_token(str(user.id))
-    return Token(access_token=token, user=UserOut.model_validate(user))
-
-
-@router.post("/login", response_model=Token)
-async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
-    email = _normalise_email(body.email)
-    user = await _find_user_by_email(db, email)
-    # Always run a verify to keep timing consistent and avoid leaking which
-    # part was wrong; message stays generic for security.
-    if not user or not verify_password(body.password, user.hashed_password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
-    token = create_access_token(str(user.id))
-    return Token(access_token=token, user=UserOut.model_validate(user))
+    @property
+    def prize_pool(self) -> float:
+        # Guard against the relationship not being loaded (avoids triggering a
+        # lazy DB load during serialization). Returns 0 rather than raising.
+        try:
+            return (self.entry_fee or 0) * len(self.participants)
+        except Exception:
+            return 0.0
 
 
-@router.get("/me", response_model=UserOut)
-async def me(user: User = Depends(get_current_user)):
-    return UserOut.model_validate(user)
+class Participant(Base):
+    __tablename__ = "participants"
+    __table_args__ = (UniqueConstraint("sweepstake_id", "user_id", name="uq_part_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    has_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    sweepstake: Mapped["Sweepstake"] = relationship(back_populates="participants")
+    user: Mapped["User"] = relationship(back_populates="participations")
+    allocation: Mapped["Allocation | None"] = relationship(
+        back_populates="participant", cascade="all, delete-orphan", uselist=False
+    )
 
 
-@router.patch("/me", response_model=UserOut)
-async def update_me(body: dict, db: AsyncSession = Depends(get_db),
-                    user: User = Depends(get_current_user)):
-    """Update the signed-in user's profile (currently just the display name)."""
-    new_name = (body or {}).get("username")
-    if new_name is not None:
-        new_name = str(new_name).strip()
-        if not new_name:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Name cannot be empty")
-        if len(new_name) > 40:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Name is too long (max 40)")
-        user.username = new_name
-    await db.flush()
-    return UserOut.model_validate(user)
+class Team(Base):
+    __tablename__ = "teams"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
+    )
+    external_id: Mapped[str | None] = mapped_column(String(40))  # football API team id
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    flag_emoji: Mapped[str] = mapped_column(String(8), default="🏳️")
+    crest_url: Mapped[str | None] = mapped_column(String(500))
+    # current tournament stage: Group|R16|QF|SF|Final|Winner|Out
+    stage: Mapped[str] = mapped_column(String(12), default="Group")
+    eliminated: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    sweepstake: Mapped["Sweepstake"] = relationship(back_populates="teams")
+    allocation: Mapped["Allocation | None"] = relationship(
+        back_populates="team", uselist=False
+    )
+
+
+class Allocation(Base):
+    """The permanent, immutable result of the draw."""
+    __tablename__ = "allocations"
+    __table_args__ = (
+        UniqueConstraint("sweepstake_id", "team_id", name="uq_alloc_team"),
+        UniqueConstraint("participant_id", name="uq_alloc_participant"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
+    )
+    participant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("participants.id", ondelete="CASCADE")
+    )
+    team_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    participant: Mapped["Participant"] = relationship(back_populates="allocation")
+    team: Mapped["Team"] = relationship(back_populates="allocation")
+
+
+class Fixture(Base):
+    __tablename__ = "fixtures"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
+    )
+    external_id: Mapped[str | None] = mapped_column(String(40), index=True)
+    home_team: Mapped[str] = mapped_column(String(80))
+    away_team: Mapped[str] = mapped_column(String(80))
+    home_score: Mapped[int | None] = mapped_column(Integer)
+    away_score: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="SCHEDULED")  # SCHEDULED|LIVE|FINISHED
+    stage: Mapped[str] = mapped_column(String(20), default="GROUP")
+    kickoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class PrizeTier(Base):
+    __tablename__ = "prize_tiers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    sweepstake_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
+    )
+    rank: Mapped[int] = mapped_column(Integer)        # 1 = winner, 2 = runner-up...
+    percentage: Mapped[float] = mapped_column(Float)  # e.g. 60.0
+
+    sweepstake: Mapped["Sweepstake"] = relationship(back_populates="prize_tiers")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    sweepstake_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sweepstakes.id", ondelete="CASCADE"))
+    icon: Mapped[str] = mapped_column(String(8), default="🔔")
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str | None] = mapped_column(Text)
+    read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

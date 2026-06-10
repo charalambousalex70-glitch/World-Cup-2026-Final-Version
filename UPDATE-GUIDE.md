@@ -1,112 +1,56 @@
-# Deployment Guide
+/* SweepStake Live service worker (v3 — network-first for the app shell).
+ * KEY FIX: index.html and the app are fetched network-first, so a new deploy
+ * shows up immediately (no more "I changed it but the old version loads").
+ * Only static assets fall back to cache; API writes/sockets always bypass.
+ */
+const CACHE = "sweepstake-v5";
 
-Two services: **backend + database on Render**, **frontend on Vercel**.
-Budget ~15 minutes. You'll need GitHub, a Render account, and a Vercel account.
-A football-data.org API key is optional (free tier at football-data.org).
+self.addEventListener("install", () => self.skipWaiting());
 
----
+self.addEventListener("activate", (e) => {
+  e.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
+});
 
-## 0. Push to GitHub
+self.addEventListener("fetch", (e) => {
+  const { request } = e;
+  const url = new URL(request.url);
+  if (request.method !== "GET" || url.protocol.startsWith("ws")) return;
 
-```bash
-cd sweepstake
-git init && git add . && git commit -m "SweepStake Live"
-git remote add origin git@github.com:YOU/sweepstake.git
-git push -u origin main
-```
+  // API calls always go to network (never serve stale data for writes/auth).
+  if (url.pathname.startsWith("/api/")) return;
 
----
+  // HTML / navigation: NETWORK-FIRST so new deploys appear instantly.
+  const isHTML =
+    request.mode === "navigate" ||
+    url.pathname === "/" ||
+    url.pathname.endsWith(".html");
+  if (isHTML) {
+    e.respondWith(
+      fetch(request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(request, copy));
+          return res;
+        })
+        .catch(() => caches.match(request).then((c) => c || caches.match("/")))
+    );
+    return;
+  }
 
-## 1. Backend + Postgres on Render
-
-### Option A — Blueprint (recommended)
-1. Render Dashboard → **New** → **Blueprint**.
-2. Select your repo. Render reads `render.yaml` and provisions:
-   - `sweepstake-api` (web service)
-   - `sweepstake-db` (PostgreSQL)
-   - `DATABASE_URL` wired automatically, `JWT_SECRET` auto-generated.
-3. Before the first deploy finishes, set the two `sync:false` vars under the
-   service's **Environment** tab:
-   - `CORS_ORIGINS` → your Vercel URL (add it after step 2; you can use
-     `https://*.vercel.app` temporarily).
-   - `FOOTBALL_API_KEY` → your key, or leave blank for offline/demo mode.
-4. Deploy. When live, hit `https://sweepstake-api.onrender.com/health` →
-   `{"status":"ok"}`.
-
-### Option B — Manual
-- New **PostgreSQL** instance; copy its Internal Connection String.
-- New **Web Service** from the repo, root dir `backend`:
-  - Build: `pip install -r requirements.txt`
-  - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-  - Env: `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS`, `FOOTBALL_API_KEY`.
-
-### Seed demo data (optional)
-Render Shell for the service:
-```bash
-python -m app.seed
-```
-Creates the "Office World Cup" demo (invite `WC26DEMO`, login
-`you@example.com` / `demo1234`).
-
-> Tables auto-create on startup. For versioned migrations later, wire up
-> Alembic against `app.models.Base.metadata`.
-
----
-
-## 2. Frontend on Vercel
-
-1. Vercel → **Add New** → **Project** → import the repo.
-2. **Root Directory**: `frontend`. Framework preset: **Other**.
-   `vercel.json` already sets output dir `public` and SPA rewrites — no build
-   command needed.
-3. Deploy. You'll get `https://your-app.vercel.app`.
-4. Point the frontend at your API. Two ways:
-   - **Simplest:** edit one line in `frontend/public/index.html`:
-     ```js
-     window.__API_URL__ = "https://sweepstake-api.onrender.com";
-     ```
-     commit & redeploy; **or**
-   - inject it without editing source by adding this before the app script
-     in `index.html`:
-     ```html
-     <script>window.__API_URL__="https://sweepstake-api.onrender.com";</script>
-     ```
-5. Go back to Render and set `CORS_ORIGINS` to your exact Vercel URL, e.g.
-   `https://your-app.vercel.app`. Redeploy the backend.
-
----
-
-## 3. Verify the full loop
-
-1. Open the Vercel URL on your phone → **Add to Home Screen** (PWA install).
-2. Sign in. The toast should say **"Connected · live data"** (not "demo mode").
-3. As admin: create a sweepstake → share the invite code → run the draw →
-   approve it.
-4. With a `FOOTBALL_API_KEY` set and the sweepstake `active`, the poller updates
-   results within ~1 minute and the leaderboard moves with no refresh.
-5. Force an update any time via **Sync** (admin) → `POST /sweepstakes/{id}/sync`.
-
----
-
-## Notes & gotchas
-
-- **Render free tier sleeps.** First request after idle takes ~30s to wake; the
-  WebSocket reconnect logic handles this gracefully.
-- **WebSockets** work over Render's HTTPS as `wss://` automatically — the client
-  derives the URL from `__API_URL__`.
-- **football-data.org free tier** is rate-limited (10 req/min) and covers major
-  competitions. Set `FOOTBALL_POLL_SECONDS` ≥ 60. For API-FOOTBALL or other
-  providers, adapt `services/football.py` (the mapping is isolated there).
-- **CORS errors** = `CORS_ORIGINS` doesn't exactly match your Vercel origin
-  (scheme + host, no trailing slash).
-- **Secrets**: never commit `.env`. `JWT_SECRET` is auto-generated by the
-  blueprint; rotate it to invalidate all sessions.
-
----
-
-## Stripe (future)
-
-Payment tracking is already modelled (`participants.has_paid`). To take real
-money: add a `POST /sweepstakes/{id}/checkout` route creating a Stripe Checkout
-Session, and a webhook that flips `has_paid` on `checkout.session.completed`.
-The UI's payment badges will reflect it with no frontend change.
+  // Other static assets: cache-first for speed, network fallback.
+  e.respondWith(
+    caches.match(request).then(
+      (cached) =>
+        cached ||
+        fetch(request).then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(request, copy).catch(() => {}));
+          return res;
+        }).catch(() => cached)
+    )
+  );
+});
