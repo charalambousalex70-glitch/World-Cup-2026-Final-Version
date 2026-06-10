@@ -165,6 +165,8 @@ class Fixture(Base):
     status: Mapped[str] = mapped_column(String(20), default="SCHEDULED")  # SCHEDULED|LIVE|FINISHED
     stage: Mapped[str] = mapped_column(String(20), default="GROUP")
     venue: Mapped[str | None] = mapped_column(String(160))  # stadium, city
+    referee: Mapped[str | None] = mapped_column(String(120))
+    detail: Mapped[str | None] = mapped_column(Text)  # JSON: goals, halftime score
     kickoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -205,6 +207,7 @@ class Comment(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     body: Mapped[str] = mapped_column(String(500))
+    reactions: Mapped[str | None] = mapped_column(Text)  # JSON {"👍":["Alex"],...}
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     user: Mapped["User"] = relationship()
