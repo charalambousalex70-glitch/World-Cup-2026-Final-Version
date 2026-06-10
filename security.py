@@ -4,7 +4,7 @@ import string
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +19,7 @@ from app.schemas import (
 )
 from app.services import football
 from app.services.draw import DrawError, approve_draw, reset_draw, run_draw
+from app.services.teams_data import RANKED_TEAMS
 from app.services.scoring import compute_leaderboard
 from app.websocket.manager import manager
 from app.models import Fixture
@@ -151,6 +152,28 @@ async def update_sweepstake(sid: uuid.UUID, body: dict,
         if fee < 0:
             raise HTTPException(422, "Entry fee cannot be negative")
         sweep.entry_fee = fee
+    if "max_participants" in body:
+        try:
+            cap = int(body["max_participants"])
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Max participants must be a whole number")
+        # Count current participants so we never set the cap below them.
+        current = (
+            await db.execute(
+                select(func.count())
+                .select_from(Participant)
+                .where(Participant.sweepstake_id == sid)
+            )
+        ).scalar() or 0
+        if cap < current:
+            raise HTTPException(
+                422, f"Can't set the limit below the {current} people already in the league."
+            )
+        if cap > len(RANKED_TEAMS):
+            raise HTTPException(
+                422, f"Maximum is {len(RANKED_TEAMS)} (one team per person from the ranked list)."
+            )
+        sweep.max_participants = cap
 
     await db.flush()
     full = await _load_full(db, sid)
