@@ -700,7 +700,7 @@ function vHome(s){
     </div>
 
     <div class="grid2">
-      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--grn)">${teamsAlive}${totalTeams?`<span class="mut" style="font-size:15px">/${totalTeams}</span>`:''}</div><div class="label" style="margin-top:2px">Teams Alive</div></div>
+      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--grn)">${teamsAlive}${(drawDone&&totalTeams)?`<span class="mut" style="font-size:15px">/${totalTeams}</span>`:''}</div><div class="label" style="margin-top:2px">${drawDone?'Teams Still In':'Teams Alive'}</div></div>
       <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--blu)">${matchesPlayed}</div><div class="label" style="margin-top:2px">Matches Played</div></div>
     </div>
 
@@ -752,14 +752,16 @@ function lbRow(x,i){
   const t=T(x.ti), me=x.p.name===(MY_NAME||'You');
   const tag = x.stage==='Out'?'<span class="tag out">OUT</span>'
     : x.stage==='Winner'?'<span class="tag win">WINNER</span>'
-    : `<span class="tag live">${x.stage}</span>`;
+    : x.stage?`<span class="tag live">${x.stage}</span>`
+    : '<span class="tag" style="opacity:.6">—</span>';   // no draw yet
+  const pts = (x.pts!=null && !isNaN(x.pts)) ? x.pts : '–';
   return `<div class="lb ${i<3?'r'+(i+1):''} ${me?'me':''}">
     <div class="pos">${i+1}</div>
     <div class="avatar" style="background:${x.p.col}">${x.p.av}</div>
     <div style="flex:1"><div style="font-weight:700;font-size:15px">${x.p.name}${me?' <span class="gold" style="font-size:11px">(you)</span>':''}</div>
       <div class="mut row" style="gap:5px;font-size:13px"><span>${t.e}</span>${t.n}</div></div>
     ${tag}
-    <div class="mono gold" style="font-weight:700;min-width:34px;text-align:right">${x.pts}</div>
+    <div class="mono gold" style="font-weight:700;min-width:34px;text-align:right">${pts}</div>
   </div>`;
 }
 function vBoard(s){
@@ -1551,7 +1553,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v8 · max-fix</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v9 · home-stats</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
