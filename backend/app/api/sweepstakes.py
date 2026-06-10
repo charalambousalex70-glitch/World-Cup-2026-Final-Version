@@ -4,18 +4,18 @@ import string
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models import (
-    Allocation, Notification, Participant, PrizeTier, Sweepstake, Team, User,
+    Allocation, Comment, Notification, Participant, PrizeTier, Sweepstake, Team, User,
 )
 from app.schemas import (
-    AllocationOut, FixtureOut, JoinRequest, LeaderboardRow, NotificationOut,
-    PaymentUpdate, SweepstakeCreate, SweepstakeOut,
+    AllocationOut, CommentCreate, CommentOut, FixtureOut, JoinRequest,
+    LeaderboardRow, NotificationOut, PaymentUpdate, SweepstakeCreate, SweepstakeOut,
 )
 from app.services import football
 from app.services.draw import DrawError, approve_draw, reset_draw, run_draw
@@ -323,6 +323,33 @@ async def sync_now(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     return rows
 
 
+# ---------- Participants ----------
+@router.delete("/{sid}/participants/{pid}", response_model=SweepstakeOut)
+async def remove_participant(sid: uuid.UUID, pid: uuid.UUID,
+                             db: AsyncSession = Depends(get_db),
+                             user: User = Depends(get_current_user)):
+    """Admin removes a participant. Blocked once the draw is approved (teams
+    are locked); reset the draw first if you need to remove someone."""
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+    if sweep.draw_approved:
+        raise HTTPException(409, "Draw is locked — reset the draw before removing people.")
+    part = await db.get(Participant, pid)
+    if not part or part.sweepstake_id != sid:
+        raise HTTPException(404, "Participant not found")
+    if part.user_id == sweep.admin_id:
+        raise HTTPException(422, "The league admin can't remove themselves.")
+    # Clear any (unapproved) allocation for them, then remove.
+    await db.execute(delete(Allocation).where(Allocation.participant_id == pid))
+    await db.delete(part)
+    await db.flush()
+    full = await _load_full(db, sid)
+    await manager.broadcast(str(sid), "participant_joined", {})  # triggers refresh on clients
+    return SweepstakeOut.model_validate(full)
+
+
 # ---------- Payment ----------
 @router.patch("/{sid}/participants/{pid}/payment", response_model=SweepstakeOut)
 async def set_payment(sid: uuid.UUID, pid: uuid.UUID, body: PaymentUpdate,
@@ -352,3 +379,45 @@ async def notifications(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         )
     ).scalars().all()
     return rows
+
+
+# ---------- Comments (league chat) ----------
+@router.get("/{sid}/comments", response_model=list[CommentOut])
+async def list_comments(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    rows = (
+        await db.execute(
+            select(Comment).where(Comment.sweepstake_id == sid)
+            .options(selectinload(Comment.user))
+            .order_by(Comment.created_at.desc()).limit(100)
+        )
+    ).scalars().all()
+    out = []
+    for c in reversed(rows):  # oldest first for display
+        out.append(CommentOut(
+            id=c.id, body=c.body, created_at=c.created_at,
+            username=c.user.username if c.user else "Player",
+            avatar_color=c.user.avatar_color if c.user else "#888",
+        ))
+    return out
+
+
+@router.post("/{sid}/comments", response_model=CommentOut, status_code=201)
+async def post_comment(sid: uuid.UUID, body: CommentCreate,
+                       db: AsyncSession = Depends(get_db),
+                       user: User = Depends(get_current_user)):
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    text = body.body.strip()
+    if not text:
+        raise HTTPException(422, "Comment cannot be empty")
+    c = Comment(sweepstake_id=sid, user_id=user.id, body=text[:500])
+    db.add(c)
+    await db.flush()
+    out = CommentOut(
+        id=c.id, body=c.body, created_at=c.created_at,
+        username=user.username, avatar_color=user.avatar_color,
+    )
+    await manager.broadcast(str(sid), "comment_added", out.model_dump(mode="json"))
+    return out
