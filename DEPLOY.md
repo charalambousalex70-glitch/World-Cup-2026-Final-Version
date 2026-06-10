@@ -1,55 +1,119 @@
-"""Application configuration loaded from environment variables."""
-from functools import lru_cache
-from pydantic_settings import BaseSettings, SettingsConfigDict
+# API Reference
 
+Base URL: `{BACKEND_URL}/api/v1`
+Auth: `Authorization: Bearer <token>` on all routes except register/login.
+Interactive docs (Swagger): `{BACKEND_URL}/docs`
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+## Auth
 
-    # Core
-    PROJECT_NAME: str = "SweepStake Live"
-    API_V1: str = "/api/v1"
-    ENVIRONMENT: str = "development"
+### POST /auth/register
+```json
+{ "email": "a@b.com", "username": "Alex", "password": "secret123" }
+```
+→ `201` `{ "access_token": "...", "token_type": "bearer", "user": { ... } }`
 
-    # Database — Render provides DATABASE_URL. We normalise it to async driver.
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/sweepstake"
+### POST /auth/login
+```json
+{ "email": "a@b.com", "password": "secret123" }
+```
+→ `200` same `Token` shape. `401` on bad credentials.
 
-    # Auth
-    JWT_SECRET: str = "change-me-in-production"
-    JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+### GET /auth/me
+→ current `User`.
 
-    # CORS — comma-separated list of allowed origins (your Vercel domain)
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+## Sweepstakes
 
-    # Football data API (https://www.football-data.org or API-FOOTBALL)
-    FOOTBALL_API_URL: str = "https://api.football-data.org/v4"
-    FOOTBALL_API_KEY: str = ""
-    FOOTBALL_POLL_SECONDS: int = 60  # how often to poll for live results
+### POST /sweepstakes
+Create. Creator auto-joins as a paid participant. Prize percentages must sum to 100.
+```json
+{
+  "name": "Office World Cup",
+  "tournament_name": "World Cup 2026",
+  "competition_code": "WC",
+  "entry_fee": 20,
+  "currency": "EUR",
+  "max_participants": 10,
+  "prize_tiers": [
+    { "rank": 1, "percentage": 60 },
+    { "rank": 2, "percentage": 25 },
+    { "rank": 3, "percentage": 15 }
+  ]
+}
+```
+→ `201` full `Sweepstake` (with `invite_code`, `prize_pool`, participants, teams).
 
-    # Load demo data (the "Office World Cup" with fake players) on first boot.
-    # Default OFF so real users start with a clean, empty app. Set AUTO_SEED=true
-    # in the environment only if you want the demo data for testing.
-    AUTO_SEED: bool = False
+### GET /sweepstakes
+→ all sweepstakes the user administers or has joined.
 
-    @property
-    def cors_list(self) -> list[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+### GET /sweepstakes/{id}
+→ one sweepstake, fully expanded.
 
-    @property
-    def async_database_url(self) -> str:
-        """Render gives postgres://... — convert to async SQLAlchemy URL."""
-        url = self.DATABASE_URL
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return url
+### DELETE /sweepstakes/{id}
+Admin only. → `204`.
 
+### POST /sweepstakes/join
+```json
+{ "invite_code": "WC26DEMO" }
+```
+→ `200` the joined sweepstake. `404` invalid code, `409` full or draw finalized.
+Broadcasts `participant_joined`.
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+## Draw
 
+### POST /sweepstakes/{id}/draw
+Admin only. Runs a fair CSPRNG allocation (re-runnable until approved).
+→ `200` list of `{ participant_id, participant_name, team_id, team_name, flag_emoji }`.
+Broadcasts `draw_completed`. `409` if already approved.
 
-settings = get_settings()
+### POST /sweepstakes/{id}/draw/approve
+Admin only. Locks the draw permanently, sets status `active`.
+→ `200` sweepstake. Broadcasts `draw_approved`.
+
+## Live data
+
+### GET /sweepstakes/{id}/leaderboard
+→ ranked rows:
+```json
+[{ "rank":1, "participant_name":"You", "team_name":"Brazil",
+   "flag_emoji":"🇧🇷", "stage":"Winner", "points":120,
+   "eliminated":false, "potential_payout":120.0 }]
+```
+
+### GET /sweepstakes/{id}/fixtures
+→ list of fixtures.
+
+### POST /sweepstakes/{id}/sync
+Admin only. Forces an immediate football-API sync. Broadcasts
+`leaderboard_updated` if anything changed.
+
+### GET /sweepstakes/{id}/notifications
+→ this user's notifications for the sweepstake, newest first.
+
+## Payments
+
+### PATCH /sweepstakes/{id}/participants/{pid}/payment
+Admin only.
+```json
+{ "has_paid": true }
+```
+→ `200` updated sweepstake.
+
+## WebSocket
+
+`WS {BACKEND_URL}/ws/sweepstakes/{id}`
+
+On connect you receive `{ "event": "connected", "data": { "room": "<id>" } }`.
+Send any text (e.g. `"ping"`) as keepalive. Events pushed by the server:
+
+| Event | Payload | Meaning |
+|-------|---------|---------|
+| `participant_joined` | `{ username, count }` | someone joined |
+| `draw_completed` | `{ allocations: [...] }` | draw run (pre-approval) |
+| `draw_approved` | `{}` | draw locked |
+| `leaderboard_updated` | `{ leaderboard: [...] }` | scores changed |
+| `fixtures_updated` | `{ count }` | N fixtures changed |
+
+## Errors
+
+Standard FastAPI `{ "detail": "..." }` with appropriate status codes
+(`401` auth, `403` not admin, `404` missing, `409` conflict, `422` validation).

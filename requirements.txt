@@ -1,14 +1,31 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-sqlalchemy==2.0.36
-alembic==1.14.0
-asyncpg==0.30.0
-psycopg2-binary==2.9.10
-pydantic==2.10.4
-pydantic-settings==2.7.1
-python-jose[cryptography]==3.3.0
-bcrypt==4.2.1
-python-multipart==0.0.20
-httpx==0.28.1
-websockets==14.1
-email-validator==2.2.0
+# Local development: Postgres + API in one command.
+#   docker compose up --build
+#   docker compose exec api python -m app.seed   # load demo data
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sweepstake
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: ./backend
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sweepstake
+      JWT_SECRET: dev-secret-change-me
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000
+      FOOTBALL_API_KEY: ""   # blank = offline/demo mode
+    ports: ["8000:8000"]
+
+volumes:
+  pgdata:
