@@ -10,6 +10,7 @@ seed/sample data is used instead — handy for local dev and the demo.
 """
 from datetime import datetime, timezone
 
+import json as _json
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,6 +152,17 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         stage = STAGE_MAP.get(m.get("stage", ""), "Group")
         kickoff = _parse_dt(m.get("utcDate"))
         venue = m.get("venue") or None
+        refs = m.get("referees") or []
+        referee = refs[0].get("name") if refs and isinstance(refs[0], dict) else None
+        # Compact detail JSON: goalscorers + halftime score when provided.
+        goals = [
+            {"minute": g.get("minute"), "scorer": (g.get("scorer") or {}).get("name"),
+             "team": (g.get("team") or {}).get("name"),
+             "assist": (g.get("assist") or {}).get("name")}
+            for g in (m.get("goals") or [])
+        ]
+        ht = (m.get("score", {}).get("halfTime") or {})
+        detail = _json.dumps({"goals": goals, "ht": [ht.get("home"), ht.get("away")]}) if (goals or ht.get("home") is not None) else None
 
         fx = existing.get(ext)
         if fx is None:
@@ -165,6 +177,8 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         fx.status, fx.stage = norm_status, stage
         fx.kickoff = kickoff
         fx.venue = venue
+        fx.referee = referee
+        fx.detail = detail
 
     await db.flush()
     if changed:
