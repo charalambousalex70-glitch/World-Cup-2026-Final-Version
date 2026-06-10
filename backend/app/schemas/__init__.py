@@ -133,6 +133,8 @@ class FixtureOut(BaseModel):
     status: str
     stage: str
     venue: str | None = None
+    referee: str | None = None
+    detail: str | None = None
     kickoff: datetime | None = None
     kickoff: datetime | None
 
@@ -160,6 +162,7 @@ class CommentOut(BaseModel):
     created_at: datetime
     username: str = ""
     avatar_color: str = "#888"
+    reactions: dict = {}
 
 
 class CommentCreate(BaseModel):
