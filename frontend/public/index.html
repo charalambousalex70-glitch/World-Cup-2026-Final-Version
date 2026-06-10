@@ -396,14 +396,79 @@ function tabBar(){
 function bindTabs(){document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{view=t.dataset.v;render()})}
 
 /* ---------------- MY LEAGUES (landing) ---------------- */
+const CUR_SYMBOL={EUR:'€',GBP:'£',USD:'$'};
+let FX_RATES=null;       // { EUR:1, GBP:..., USD:... } relative to base
+let FX_BASE=null;        // the base currency the rates are relative to
+let PREF_CUR=null;       // user's preferred display currency
+try{PREF_CUR=localStorage.getItem('ssl_cur')||null}catch{}
+
+function leaguePool(l){ return (l.entry_fee||0)*((l.participants||[]).length); }
+
+/* Fetch live FX rates (free, no key). Falls back to null on failure, in which
+   case we show per-currency subtotals instead of a converted total. */
+async function loadFxRates(base){
+  try{
+    const r=await fetch(`https://api.frankfurter.app/latest?from=${base}`);
+    if(!r.ok)throw new Error('fx http '+r.status);
+    const data=await r.json();
+    const rates=data.rates||{}; rates[base]=1;
+    FX_RATES=rates; FX_BASE=base;
+    return true;
+  }catch(e){ FX_RATES=null; FX_BASE=null; return false; }
+}
+function convert(amount, from, to){
+  if(from===to)return amount;
+  if(!FX_RATES||FX_BASE!==to)return null;     // can't convert reliably
+  const rate=FX_RATES[from];
+  if(!rate)return null;
+  return amount/rate;                          // rates are TO-per-FROM from base=to
+}
+
 function vLeagues(s){
   const list=MY_LEAGUES||[];
+  // While restoring a session, MY_LEAGUES is briefly empty but LIVE isn't set
+  // yet — show a gentle loading state instead of the empty "no leagues" copy.
+  const restoring = auth && !LIVE;
+  if(restoring){
+    s.innerHTML=`<div class="fade" style="padding-top:60px;text-align:center">
+      <div class="ball" style="width:46px;height:46px;margin:0 auto 16px;animation:spin 1.2s linear infinite"></div>
+      <div class="mut" style="font-size:14px">Loading your leagues…</div></div>`;
+    return;
+  }
+  // Group pools by currency.
+  const byCur={};
+  list.forEach(l=>{ const c=l.currency||'EUR'; byCur[c]=(byCur[c]||0)+leaguePool(l); });
+  const currencies=Object.keys(byCur);
+  const display=PREF_CUR || (currencies[0]||'EUR');
+
+  // Try to express everything in the display currency.
+  let total=0, convertible=true;
+  for(const c of currencies){
+    if(c===display){ total+=byCur[c]; continue; }
+    const v=convert(byCur[c],c,display);
+    if(v==null){ convertible=false; break; }
+    total+=v;
+  }
+  const multiCur=currencies.length>1;
+  const totalLine = !list.length ? '' : (convertible
+    ? `<div class="pool">${CUR_SYMBOL[display]||''}${Math.round(total).toLocaleString()}</div>
+       ${multiCur?`<div class="mut" style="font-size:11px">converted to ${display} · live rates</div>`:''}`
+    : `<div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center">${currencies.map(c=>`<div class="pool" style="font-size:26px">${CUR_SYMBOL[c]||''}${Math.round(byCur[c]).toLocaleString()}</div>`).join('')}</div>
+       <div class="mut" style="font-size:11px">rates unavailable — showing each currency</div>`);
+
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
     <div class="between">
       <div><div class="label">Signed in as</div>
         <h2 style="font-size:24px;margin-top:2px">${MY_NAME||'You'}</h2></div>
       <div class="avatar" style="background:var(--gold)">${(MY_NAME||'Y').slice(0,2).toUpperCase()}</div>
     </div>
+
+    ${list.length?`<div class="hero" style="text-align:center">
+      <div class="label" style="color:#cdd6ee">Total Invested${multiCur?` <span style="cursor:pointer;text-decoration:underline" onclick="cycleCurrency()">(${display} ▾)</span>`:''}</div>
+      ${totalLine}
+      <div class="mut" style="font-size:12px;margin-top:6px">across ${list.length} ${list.length===1?'league':'leagues'}</div>
+    </div>`:''}
+
     <div class="between"><div class="label">My Leagues</div><span class="mut" style="font-size:12px">${list.length} ${list.length===1?'league':'leagues'}</span></div>
     ${list.length? list.map(l=>leagueCard(l)).join('')
       : `<div class="card mut" style="text-align:center;font-size:14px;padding:26px 18px">
@@ -413,16 +478,34 @@ function vLeagues(s){
     <button class="btn gold" onclick="openCreate()">＋ Create a League</button>
     <button class="btn ghost" onclick="openJoin()">🔗 Join with Invite Code</button>
   </div>`;
+
+  // If we have mixed currencies and no usable rates yet, fetch them then re-render.
+  if(multiCur && (!FX_RATES || FX_BASE!==display)){
+    loadFxRates(display).then(ok=>{ if(ok && view==='leagues') render(); });
+  }
 }
+/* Let the user pick which currency to total everything in. */
+window.cycleCurrency=()=>{
+  const list=MY_LEAGUES||[];
+  const curs=[...new Set(['EUR','GBP','USD',...list.map(l=>l.currency||'EUR')])];
+  const cur=PREF_CUR||list[0]?.currency||'EUR';
+  const next=curs[(curs.indexOf(cur)+1)%curs.length];
+  PREF_CUR=next; try{localStorage.setItem('ssl_cur',next)}catch{}
+  FX_RATES=null; FX_BASE=null;   // force refetch in the new base
+  render();
+};
 function leagueCard(l){
   const n=(l.participants||[]).length;
   const status={open:'Open · joining',drawn:'Draw done',active:'Live',finished:'Finished'}[l.status]||l.status||'';
   const isAdmin = l.admin_id && MY_ID && l.admin_id===MY_ID;
+  const pool=leaguePool(l);
+  const sym=CUR_SYMBOL[l.currency||'EUR']||'';
   return `<div class="card glow" style="cursor:pointer" onclick="openLeague('${l.id}')">
     <div class="between">
       <div style="flex:1;min-width:0">
         <div style="font-weight:700;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.name}</div>
         <div class="mut" style="font-size:12px;margin-top:2px">${l.tournament_name} · 👥 ${n}${isAdmin?' · 👑 you run this':''}</div>
+        <div class="gold mono" style="font-size:13px;margin-top:4px">${sym}${pool.toLocaleString()} pool</div>
       </div>
       <div style="text-align:right">
         <div class="tag ${l.status==='active'?'live':'live'}" style="margin-bottom:4px">${status}</div>
@@ -512,7 +595,13 @@ function teamRow(t,info,canEdit){
     ${btn}
   </div>`;
 }
-let EXCLUDED=new Set();
+// Exclusions are tracked PER LEAGUE so they never bleed across leagues.
+const EXCLUDED_BY_LEAGUE={};       // { leagueId: Set(teamNames) }
+let EXCLUDED=new Set();             // points at the current league's set
+function loadExclusionsFor(id){
+  if(!EXCLUDED_BY_LEAGUE[id])EXCLUDED_BY_LEAGUE[id]=new Set();
+  EXCLUDED=EXCLUDED_BY_LEAGUE[id];
+}
 window.toggleTeam=(name)=>{
   if(EXCLUDED.has(name))EXCLUDED.delete(name);else EXCLUDED.add(name);
   render();
@@ -827,7 +916,8 @@ window.doResetDraw=async()=>{
   try{
     await apiReq(`/sweepstakes/${CUR_SWEEP.id}/draw/reset`,{method:'POST'});
     const m=document.querySelector('.modal'); if(m)m.remove();
-    drawn=[]; drawResult=null; EXCLUDED=new Set();
+    drawn=[]; drawResult=null;
+    EXCLUDED.clear();   // clear THIS league's exclusions only
     await refreshSweepstake();
     view='draw'; render();
     toast('Draw reset — you can run it again','↩️');
@@ -971,6 +1061,7 @@ window.togglePaid=async(i)=>{
 };
 window.openEditLeague=()=>{
   const c=sweep.cur;
+  const cap=(CUR_SWEEP&&CUR_SWEEP.max_participants)||players.length||10;
   modal(`<h2 style="font-size:21px;margin-bottom:14px">Edit League Settings</h2>
     <div style="display:flex;flex-direction:column;gap:12px">
       <div><div class="label" style="margin-bottom:6px">League name</div>
@@ -985,6 +1076,9 @@ window.openEditLeague=()=>{
         <div><div class="label" style="margin-bottom:6px">Stake (per player)</div>
           <input id="el_fee" type="number" min="0" step="1" value="${sweep.fee}"></div>
       </div>
+      <div><div class="label" style="margin-bottom:6px">Max players</div>
+        <input id="el_max" type="number" min="${players.length||1}" max="48" step="1" value="${cap}">
+        <div class="mut" style="font-size:11px;margin-top:5px">Currently ${players.length} joined. Raise this to let more people in (up to 48).</div></div>
     </div>
     <button class="btn gold" id="el_save" style="margin-top:16px" onclick="saveLeague()">Save Changes</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Cancel</button>`);
@@ -993,12 +1087,14 @@ window.saveLeague=async()=>{
   const name=(($('#el_name')||{}).value||'').trim();
   const currency=($('#el_cur')||{}).value||'EUR';
   const entry_fee=+($('#el_fee')||{}).value||0;
+  const max_participants=+($('#el_max')||{}).value||players.length||10;
   if(!name){toast('League name cannot be empty','✏️');return;}
+  if(max_participants<players.length){toast(`Can't go below the ${players.length} already in`,'⚠️');return;}
   if(!LIVE){toast('Connect to the backend first','🔧');return;}
   const btn=$('#el_save'); if(btn){btn.textContent='Saving…';btn.style.opacity=.6;}
   try{
     await apiReq(`/sweepstakes/${CUR_SWEEP.id}`,{method:'PATCH',
-      body:{name,currency,entry_fee}});
+      body:{name,currency,entry_fee,max_participants}});
     const m=document.querySelector('.modal'); if(m)m.remove();
     await refreshSweepstake();
     toast('League updated ✅','✅');
@@ -1053,7 +1149,9 @@ window.doLogout=()=>{
   // Reset all session state so the next user starts clean.
   auth=false; LIVE=false; JWT=null; setJWT(null); MY_NAME=null; MY_ID=null;
   CUR_SWEEP=null; HAS_SWEEPSTAKE=false; MY_LEAGUES=[];
-  clearDemoData(); drawn=[]; drawResult=null; EXCLUDED=new Set();
+  clearDemoData(); drawn=[]; drawResult=null;
+  Object.keys(EXCLUDED_BY_LEAGUE).forEach(k=>delete EXCLUDED_BY_LEAGUE[k]);
+  EXCLUDED=new Set();
   view='home';
   render();
   setTimeout(()=>toast('Signed out','👋'),200);
@@ -1331,6 +1429,7 @@ async function loadMyLeagues(){
 async function selectLeague(id){
   const s=await apiReq(`/sweepstakes/${id}`);
   applySweepstake(s);
+  loadExclusionsFor(id);   // switch to THIS league's exclusion set
   HAS_SWEEPSTAKE=true;
   startLive(s.id);
   await refreshLive();
@@ -1440,6 +1539,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v5 · max-players</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
@@ -1459,20 +1559,24 @@ try{
 /* On load, if we have a saved token, validate it and restore the session so a
    refresh keeps the user logged in. Otherwise show the sign-in screen. */
 async function boot(){
-  if(JWT){
-    try{
-      const u=await apiReq('/auth/me',{auth:true});
-      MY_NAME=(u&&u.username)||null; MY_ID=(u&&u.id)||null; LIVE=true; auth=true;
-      await loadMyLeagues();
-      view='leagues';
-      render();
-      return;
-    }catch(e){
-      // Token invalid/expired (or server unreachable) — fall back to sign-in.
-      setJWT(null);
-    }
+  if(!JWT){ render(); return; }   // no saved session → show sign-in immediately
+  // We have a saved token: show a quick loading state, then validate in the
+  // background so a slow/sleeping server can never leave the screen blank.
+  auth=true; view='leagues'; MY_LEAGUES=[]; render();
+  try{
+    const u=await apiReq('/auth/me',{auth:true});
+    MY_NAME=(u&&u.username)||null; MY_ID=(u&&u.id)||null; LIVE=true; auth=true;
+    await loadMyLeagues();
+    view='leagues';
+    render();
+  }catch(e){
+    // Token invalid/expired or server unreachable — drop to sign-in.
+    setJWT(null); auth=false; LIVE=false;
+    render();
   }
-  render();
 }
+// Render the very first frame synchronously so there's never a blank screen,
+// then kick off session restore.
+try{ render(); }catch(e){ console.error('initial render failed',e); }
 boot();
 </script>
