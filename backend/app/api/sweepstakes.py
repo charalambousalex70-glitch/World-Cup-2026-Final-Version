@@ -392,12 +392,16 @@ async def list_comments(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
             .order_by(Comment.created_at.desc()).limit(100)
         )
     ).scalars().all()
+    import json as _json
     out = []
     for c in reversed(rows):  # oldest first for display
+        try: rx = _json.loads(c.reactions) if c.reactions else {}
+        except Exception: rx = {}
         out.append(CommentOut(
             id=c.id, body=c.body, created_at=c.created_at,
             username=c.user.username if c.user else "Player",
             avatar_color=c.user.avatar_color if c.user else "#888",
+            reactions=rx,
         ))
     return out
 
@@ -420,4 +424,34 @@ async def post_comment(sid: uuid.UUID, body: CommentCreate,
         username=user.username, avatar_color=user.avatar_color,
     )
     await manager.broadcast(str(sid), "comment_added", out.model_dump(mode="json"))
+    return out
+
+
+@router.post("/{sid}/comments/{cid}/react", response_model=CommentOut)
+async def react_comment(sid: uuid.UUID, cid: uuid.UUID, body: dict,
+                        db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """Toggle the current user's emoji reaction on a comment."""
+    import json as _json
+    emoji = str((body or {}).get("emoji") or "").strip()[:8]
+    if not emoji:
+        raise HTTPException(422, "Missing emoji")
+    c = await db.get(Comment, cid)
+    if not c or c.sweepstake_id != sid:
+        raise HTTPException(404, "Comment not found")
+    try: rx = _json.loads(c.reactions) if c.reactions else {}
+    except Exception: rx = {}
+    users = set(rx.get(emoji) or [])
+    if user.username in users: users.discard(user.username)   # toggle off
+    else: users.add(user.username)
+    if users: rx[emoji] = sorted(users)
+    else: rx.pop(emoji, None)
+    c.reactions = _json.dumps(rx)
+    await db.flush()
+    cu = await db.get(User, c.user_id)
+    out = CommentOut(id=c.id, body=c.body, created_at=c.created_at,
+                     username=cu.username if cu else "Player",
+                     avatar_color=cu.avatar_color if cu else "#888",
+                     reactions=rx)
+    await manager.broadcast(str(sid), "comment_updated", out.model_dump(mode="json"))
     return out
