@@ -81,4 +81,5 @@ async def root():
 
 @app.get("/health", tags=["meta"])
 async def health():
-    return {"status": "ok", "service": settings.PROJECT_NAME}
+    # 'build' lets you confirm which backend version is actually live on Render.
+    return {"status": "ok", "service": settings.PROJECT_NAME, "build": "v8-maxplayers"}
