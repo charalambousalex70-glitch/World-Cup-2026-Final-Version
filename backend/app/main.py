@@ -26,9 +26,13 @@ async def lifespan(app: FastAPI):
         # ADD COLUMN IF NOT EXISTS is safe to run on every boot.
         try:
             from sqlalchemy import text
-            await conn.execute(text(
-                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS venue VARCHAR(160)"
-            ))
+            for ddl in (
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS venue VARCHAR(160)",
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS referee VARCHAR(120)",
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS detail TEXT",
+                "ALTER TABLE comments ADD COLUMN IF NOT EXISTS reactions TEXT",
+            ):
+                await conn.execute(text(ddl))
         except Exception:
             pass  # never block startup on a migration nicety
 
