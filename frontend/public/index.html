@@ -797,6 +797,7 @@ async function loadComments(){
   try{COMMENTS=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/comments`)||[];}
   catch(e){COMMENTS=[];}
 }
+window.addEmoji=(e)=>{const i=$('#chatinput');if(i){i.value+=e;i.focus();}};
 window.sendComment=async()=>{
   const inp=$('#chatinput'); const text=((inp||{}).value||'').trim();
   if(!text)return;
@@ -809,15 +810,36 @@ window.sendComment=async()=>{
     renderChatList();
   }catch(e){toast('Could not send: '+(e.message||'error'),'⚠️');if(inp)inp.value=text;}
 };
+const REACT_EMOJIS=['👍','😂','🔥','⚽','😭','🏆'];
 function chatRowHTML(c){
   const mine=c.username===(MY_NAME||'');
+  const rx=c.reactions||{};
+  const chips=Object.keys(rx).map(e=>{
+    const users=rx[e]||[]; const me=users.includes(MY_NAME||'');
+    return `<span onclick="reactTo('${c.id}','${e}')" title="${users.join(', ')}" style="cursor:pointer;font-size:12px;padding:2px 7px;border-radius:10px;border:1px solid ${me?'var(--gold)':'var(--line)'};background:${me?'rgba(255,200,61,.15)':'var(--card)'};margin-right:4px">${e} ${users.length}</span>`;
+  }).join('');
   return `<div style="display:flex;gap:8px;margin-bottom:10px;${mine?'flex-direction:row-reverse;text-align:right':''}">
     <div class="avatar" style="width:28px;height:28px;font-size:11px;flex-shrink:0;background:${c.avatar_color||'#888'}">${(c.username||'P').slice(0,2).toUpperCase()}</div>
     <div style="max-width:75%">
       <div class="mut" style="font-size:10px;margin-bottom:2px">${c.username||'Player'} · ${timeAgo(c.created_at)}</div>
       <div style="background:${mine?'rgba(255,200,61,.14)':'var(--card)'};border:1px solid var(--line);border-radius:12px;padding:8px 11px;font-size:14px;word-break:break-word">${(c.body||'').replace(/</g,'&lt;')}</div>
+      <div style="margin-top:4px;${mine?'text-align:right':''}">${chips}<span onclick="openReactPicker('${c.id}')" style="cursor:pointer;font-size:12px;padding:2px 7px;border-radius:10px;border:1px dashed var(--line);color:var(--mut)">😀+</span></div>
     </div></div>`;
 }
+window.openReactPicker=(cid)=>{
+  modal(`<h2 style="font-size:18px;margin-bottom:14px">React</h2>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      ${REACT_EMOJIS.map(e=>`<span onclick="reactTo('${cid}','${e}');document.querySelector('.modal').remove()" style="font-size:30px;cursor:pointer;padding:8px">${e}</span>`).join('')}
+    </div>`);
+};
+window.reactTo=async(cid,emoji)=>{
+  if(!LIVE)return;
+  try{
+    const c=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/comments/${cid}/react`,{method:'POST',body:{emoji}});
+    const i=(COMMENTS||[]).findIndex(x=>x.id===c.id);
+    if(i>=0){COMMENTS[i]=c;renderChatList();}
+  }catch(e){toast('Reaction failed','⚠️');}
+};
 function renderChatList(){
   const el=$('#chatlist'); if(!el)return;
   el.innerHTML=(Array.isArray(COMMENTS)&&COMMENTS.length)
@@ -852,6 +874,9 @@ function vBoard(s){
     <div class="between" style="margin-top:6px"><div class="label">League Chat</div><span class="mut" style="font-size:11px">everyone in this league</span></div>
     <div class="card" style="padding:12px">
       <div id="chatlist" style="max-height:300px;overflow-y:auto;margin-bottom:10px"></div>
+      <div class="row" style="gap:6px;margin-bottom:8px;flex-wrap:wrap">
+        ${['⚽','🔥','😂','🏆','👏','😭','🍀','💪'].map(e=>`<span onclick="addEmoji('${e}')" style="font-size:20px;cursor:pointer;padding:2px 4px">${e}</span>`).join('')}
+      </div>
       <div class="row" style="gap:8px">
         <input id="chatinput" placeholder="Say something…" maxlength="500" style="flex:1"
           onkeydown="if(event.key==='Enter')sendComment()">
@@ -1035,6 +1060,40 @@ function vFixtures(s){
       (document.querySelector('#fxseg button.on')||{}).dataset?.f||'upcoming');});
   }
 }
+window.openMatch=(fid)=>{
+  const x=(LIVE_FIXTURES||[]).find(f=>String(f.id)===String(fid));
+  if(!x){toast('Match details appear once live data loads','ℹ️');return;}
+  let det={goals:[],ht:[null,null]};
+  try{ if(x.detail) det=Object.assign(det,JSON.parse(x.detail)); }catch{}
+  const status = x.status==='LIVE'?'<span class="gold">● LIVE</span>'
+    : x.status==='FINISHED'?'Full Time' : (kickoffLabel(x.kickoff)||'Scheduled');
+  const score = x.status==='SCHEDULED' ? 'vs' : `${x.home_score??'–'} – ${x.away_score??'–'}`;
+  const goalsRows = det.goals.length ? det.goals.map(g=>
+    `<div class="between" style="font-size:13px;margin-bottom:6px">
+      <span>⚽ ${g.scorer||'?'} ${g.assist?`<span class="mut" style="font-size:11px">(assist: ${g.assist})</span>`:''}</span>
+      <span class="mono mut">${g.minute!=null?g.minute+"'":''} · ${g.team||''}</span></div>`).join('')
+    : `<div class="mut" style="font-size:12px">${x.status==='SCHEDULED'?'Goals appear here once the match kicks off.':'No goal data from the feed for this match.'}</div>`;
+  modal(`<div style="text-align:center;margin-bottom:14px">
+      <div class="mut" style="font-size:11px;margin-bottom:8px">${x.stage||''} · ${status}</div>
+      <div class="row" style="justify-content:center;gap:14px;align-items:center">
+        <div style="text-align:center;width:90px">${flagImg(x.home_team,30)}<div style="font-weight:700;font-size:13px;margin-top:4px">${x.home_team}</div></div>
+        <div class="mono" style="font-size:30px;font-weight:800">${score}</div>
+        <div style="text-align:center;width:90px">${flagImg(x.away_team,30)}<div style="font-weight:700;font-size:13px;margin-top:4px">${x.away_team}</div></div>
+      </div>
+      ${(det.ht&&det.ht[0]!=null)?`<div class="mut" style="font-size:11px;margin-top:6px">HT ${det.ht[0]} – ${det.ht[1]}</div>`:''}
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="between" style="font-size:13px;margin-bottom:8px"><span class="mut">📅 Kick-off</span><b>${x.kickoff?new Date(x.kickoff).toLocaleString([],{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'TBC'}</b></div>
+      <div class="between" style="font-size:13px;margin-bottom:8px"><span class="mut">📍 Venue</span><b style="text-align:right">${x.venue||'TBC'}</b></div>
+      <div class="between" style="font-size:13px"><span class="mut">🟨 Referee</span><b>${x.referee||'TBC'}</b></div>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="label" style="margin-bottom:8px">Goals</div>
+      ${goalsRows}
+    </div>
+    <p class="mut" style="font-size:11px;line-height:1.5">Lineups, possession and shot stats aren't provided by the free football data feed, and TV listings vary by country — check your local guide for the broadcast channel.</p>
+    <button class="btn ghost" style="margin-top:10px" onclick="document.querySelector('.modal').remove()">Close</button>`);
+};
 function flagFor(name){
   const t=teams.find(t=>t.n===name);
   return (t&&t.e)|| (window.FIXTURE_FLAGS&&FIXTURE_FLAGS[name]) || '🏳️';
@@ -1060,7 +1119,7 @@ function fxList(f){
     list=LIVE_FIXTURES.map(x=>({a:x.home_team,b:x.away_team,sa:x.home_score??'–',sb:x.away_score??'–',
       status:x.status,
       st:x.status==='LIVE'?'LIVE':(x.status==='FINISHED'?'FT':'•'),
-      live:x.status==='LIVE',stage:x.stage||'',kickoff:x.kickoff,venue:x.venue||''}));
+      live:x.status==='LIVE',stage:x.stage||'',kickoff:x.kickoff,venue:x.venue||'',id:x.id,referee:x.referee||'',detail:x.detail||''}));
   }else{
     list=fixtures.map(x=>({...x,status:x.live?'LIVE':(x.st==='FT'?'FINISHED':'SCHEDULED'),kickoff:x.kickoff}));
   }
@@ -1080,7 +1139,7 @@ function fxList(f){
   return list.map(x=>{
     const meta = x.live ? `<span class="gold">${x.st} ●</span>`
       : (x.status==='FINISHED' ? 'FT' : (kickoffLabel(x.kickoff)||'TBD'));
-    return `<div class="fx">
+    return `<div class="fx" style="cursor:pointer" onclick="openMatch('${x.id||''}')">
       <div class="fxteam">${flagImg(x.a,20)}${x.a}</div>
       <div style="text-align:center"><div class="score ${x.live?'lv':''}">${x.status==='SCHEDULED'?'vs':x.sa+' – '+x.sb}</div>
         <div class="mut" style="font-size:10px;margin-top:4px">${meta}${x.stage?' · '+x.stage:''}</div>${x.venue?`<div class="mut" style="font-size:9px;margin-top:2px">📍 ${x.venue}</div>`:''}</div>
@@ -1536,6 +1595,10 @@ function startLive(sid){
         refreshSweepstake();   // re-fetch real participant list → count updates
       }
       else if(['draw_approved','draw_completed','draw_reset'].includes(m.event)){refreshSweepstake();}
+      else if(m.event==='comment_updated'){
+        const i=(COMMENTS||[]).findIndex(x=>x.id===(m.data&&m.data.id));
+        if(i>=0){COMMENTS[i]=m.data;renderChatList();}
+      }
       else if(m.event==='comment_added'){
         if(!Array.isArray(COMMENTS))COMMENTS=[];
         if(m.data&&m.data.id&&!COMMENTS.find(x=>x.id===m.data.id)){COMMENTS.push(m.data);renderChatList();}
@@ -1702,7 +1765,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v10 · pwa-flags-venue-chat</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v11 · reactions-matchinfo</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
