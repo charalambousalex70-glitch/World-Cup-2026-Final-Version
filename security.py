@@ -176,6 +176,7 @@ async def update_sweepstake(sid: uuid.UUID, body: dict,
         sweep.max_participants = cap
 
     await db.flush()
+    await db.refresh(sweep)   # ensure we read back the just-saved values
     full = await _load_full(db, sid)
     await manager.broadcast(str(sid), "leaderboard_updated", {})
     return SweepstakeOut.model_validate(full)
