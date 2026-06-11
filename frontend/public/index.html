@@ -223,14 +223,7 @@ window.FIXTURE_FLAGS=FIXTURE_FLAGS;
 /* Ranked contender pool (top of list = most likely to win). The Teams tab uses
    the top-N for the draw. Mirrors the backend's RANKED_TEAMS. */
 const RANKED_POOL=[
- ['Spain','🇪🇸'],['France','🇫🇷'],['England','🏴󠁧󠁢󠁥󠁮󠁧󠁿'],['Brazil','🇧🇷'],['Portugal','🇵🇹'],['Argentina','🇦🇷'],
- ['Germany','🇩🇪'],['Netherlands','🇳🇱'],['Belgium','🇧🇪'],['Norway','🇳🇴'],['Japan','🇯🇵'],['Colombia','🇨🇴'],
- ['USA','🇺🇸'],['Mexico','🇲🇽'],['Uruguay','🇺🇾'],['Morocco','🇲🇦'],['Switzerland','🇨🇭'],['Croatia','🇭🇷'],
- ['Türkiye','🇹🇷'],['Ecuador','🇪🇨'],['Senegal','🇸🇳'],['Paraguay','🇵🇾'],['Canada','🇨🇦'],['Austria','🇦🇹'],
- ['Sweden','🇸🇪'],['Ivory Coast','🇨🇮'],['Algeria','🇩🇿'],['Scotland','🏴󠁧󠁢󠁳󠁣󠁴󠁿'],['Australia','🇦🇺'],['Cape Verde','🇨🇻'],
- ['Curacao','🇨🇼'],['DR Congo','🇨🇩'],['Haiti','🇭🇹'],['Iran','🇮🇷'],['Iraq','🇮🇶'],['Jordan','🇯🇴'],
- ['New Zealand','🇳🇿'],['Panama','🇵🇦'],['Qatar','🇶🇦'],['Saudi Arabia','🇸🇦'],['South Africa','🇿🇦'],['Tunisia','🇹🇳'],
- ['Uzbekistan','🇺🇿'],['Ghana','🇬🇭'],['Czechia','🇨🇿'],['Bosnia & Herzegovina','🇧🇦'],['South Korea','🇰🇷'],['Egypt','🇪🇬']
+ ['Spain','🇪🇸'],['France','🇫🇷'],['England','🏴󠁧󠁢󠁥󠁮󠁧󠁿'],['Portugal','🇵🇹'],['Brazil','🇧🇷'],['Argentina','🇦🇷'],['Germany','🇩🇪'],['Netherlands','🇳🇱'],['Norway','🇳🇴'],['Belgium','🇧🇪'],['Colombia','🇨🇴'],['Japan','🇯🇵'],['Morocco','🇲🇦'],['USA','🇺🇸'],['Uruguay','🇺🇾'],['Mexico','🇲🇽'],['Switzerland','🇨🇭'],['Croatia','🇭🇷'],['Türkiye','🇹🇷'],['Ecuador','🇪🇨'],['Senegal','🇸🇳'],['Sweden','🇸🇪'],['Canada','🇨🇦'],['Austria','🇦🇹'],['Paraguay','🇵🇾'],['Scotland','🏴󠁧󠁢󠁳󠁣󠁴󠁿'],['Ivory Coast','🇨🇮'],['Egypt','🇪🇬'],['Czechia','🇨🇿'],['Bosnia & Herzegovina','🇧🇦'],['Ghana','🇬🇭'],['Algeria','🇩🇿'],['South Korea','🇰🇷'],['Tunisia','🇹🇳'],['Australia','🇦🇺'],['Iran','🇮🇷'],['DR Congo','🇨🇩'],['South Africa','🇿🇦'],['Saudi Arabia','🇸🇦'],['Panama','🇵🇦'],['Iraq','🇮🇶'],['Uzbekistan','🇺🇿'],['Qatar','🇶🇦'],['Cape Verde','🇨🇻'],['New Zealand','🇳🇿'],['Jordan','🇯🇴'],['Haiti','🇭🇹'],['Curacao','🇨🇼']
 ].map(([name,flag])=>({name,flag}));
 window.RANKED_POOL=RANKED_POOL;
 
@@ -1877,7 +1870,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v13 · predictions-badges-digest-bot</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v14 · odds-ranking</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
