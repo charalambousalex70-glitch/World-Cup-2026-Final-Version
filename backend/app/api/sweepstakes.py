@@ -507,7 +507,50 @@ async def save_prediction(sid: uuid.UUID, body: PredictionIn,
         db.add(Prediction(sweepstake_id=sid, user_id=user.id,
                           fixture_id=body.fixture_id, home_pred=body.home, away_pred=body.away))
     await db.flush()
-    return PredictionOut(fixture_id=body.fixture_id, home=body.home, away=body.away)
+
+    # ---- Mirror to the user's OTHER leagues ----
+    # Find the same match (same teams + kickoff) in every other league this user
+    # is in, and copy the prediction there too — but only where that league's
+    # copy of the match hasn't kicked off yet (never overwrite a locked one).
+    mirrored = 0
+    try:
+        my_league_ids = (
+            await db.execute(
+                select(Participant.sweepstake_id).where(Participant.user_id == user.id)
+            )
+        ).scalars().all()
+        other_ids = [lid for lid in my_league_ids if lid != sid]
+        if other_ids:
+            twins = (
+                await db.execute(
+                    select(Fixture).where(
+                        Fixture.sweepstake_id.in_(other_ids),
+                        Fixture.home_team == fx.home_team,
+                        Fixture.away_team == fx.away_team,
+                    )
+                )
+            ).scalars().all()
+            for tw in twins:
+                # Skip any league copy that's already kicked off / finished.
+                if tw.status != "SCHEDULED" or (tw.kickoff and tw.kickoff <= now):
+                    continue
+                exist = (
+                    await db.execute(select(Prediction).where(
+                        Prediction.user_id == user.id, Prediction.fixture_id == tw.id))
+                ).scalar_one_or_none()
+                if exist:
+                    exist.home_pred, exist.away_pred = body.home, body.away
+                else:
+                    db.add(Prediction(sweepstake_id=tw.sweepstake_id, user_id=user.id,
+                                      fixture_id=tw.id, home_pred=body.home, away_pred=body.away))
+                mirrored += 1
+            if mirrored:
+                await db.flush()
+    except Exception:
+        pass  # mirroring is a convenience; never fail the primary save
+
+    return PredictionOut(fixture_id=body.fixture_id, home=body.home, away=body.away,
+                         mirrored=mirrored)
 
 
 @router.get("/{sid}/predictions", response_model=list[PredictionOut])
@@ -599,39 +642,7 @@ async def get_standings(sid: uuid.UUID, refresh: bool = False,
     return cached
 
 
-@router.get("/{sid}/standings/debug")
-async def standings_debug(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
-                          user: User = Depends(get_current_user)):
-    """Diagnostic: shows exactly what the feed returns for standings so we can
-    pinpoint whether the issue is the API, the plan, or our parsing."""
-    import json as _json
-    sweep = await db.get(Sweepstake, sid)
-    if not sweep:
-        raise HTTPException(404, "Not found")
-    info = {
-        "competition_code": sweep.competition_code,
-        "api_key_configured": bool(settings.FOOTBALL_API_KEY),
-        "url": f"{settings.FOOTBALL_API_URL}/competitions/{sweep.competition_code}/standings",
-        "cached_groups": list((_json.loads(sweep.standings) if sweep.standings else {}).keys()),
-    }
-    try:
-        async with httpx.AsyncClient(timeout=12) as client:
-            r = await client.get(info["url"], headers=football._headers())
-            info["http_status"] = r.status_code
-            if r.status_code == 200:
-                data = r.json()
-                blocks = data.get("standings", [])
-                info["standings_blocks"] = len(blocks)
-                info["block_types"] = [b.get("type") for b in blocks]
-                info["block_groups"] = [b.get("group") for b in blocks]
-            else:
-                info["error_body"] = r.text[:300]
-    except Exception as e:
-        info["error"] = str(e)
-    parsed = await football.fetch_standings(sweep.competition_code)
-    info["parsed_groups"] = list(parsed.keys())
-    info["parsed_total_rows"] = sum(len(v) for v in parsed.values())
-    return info
+@router.get("/{sid}/fixtures/{fid}/predictions")
 async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
                               db: AsyncSession = Depends(get_db),
                               user: User = Depends(get_current_user)):
