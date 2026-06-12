@@ -1341,16 +1341,31 @@ window.openMatch=(fid)=>{
 };
 async function loadFixturePredictions(fid){
   if(!LIVE||!CUR_SWEEP)return;
+  const el=document.getElementById('predhist'); if(!el)return;
   try{
     const d=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/fixtures/${fid}/predictions`);
-    const el=document.getElementById('predhist'); if(!el)return;
-    if(d.locked){el.innerHTML='';return;}
+    if(d.locked){
+      // Before kick-off: don't reveal picks, but show how many are in.
+      const n=d.count||0;
+      const you=d.you?`<div class="mut" style="font-size:11px;margin-top:6px">Your pick: <b>${d.you.home}–${d.you.away}</b> (you can change it until kick-off)</div>`:'';
+      el.innerHTML=`<div class="card" style="margin-bottom:10px">
+        <div class="label" style="margin-bottom:6px">🔮 Predictions</div>
+        <div class="mut" style="font-size:12px">${n} ${n===1?'person has':'people have'} predicted so far. Everyone's picks are revealed at kick-off.</div>${you}</div>`;
+      return;
+    }
     if(!d.predictions.length){el.innerHTML='<div class="card mut" style="margin-bottom:10px;text-align:center;font-size:12px">No predictions were made for this match.</div>';return;}
-    const rows=d.predictions.map(p=>`<div class="between" style="font-size:13px;margin-bottom:6px">
-      <span><span class="avatar" style="width:22px;height:22px;font-size:10px;display:inline-flex;vertical-align:middle;background:${p.avatar_color}">${(p.username||'P').slice(0,2).toUpperCase()}</span> ${p.username}</span>
-      <span class="mono">${p.home}–${p.away}${p.points!=null?` <b class="${p.points===5?'gold':p.points===2?'':'mut'}" style="margin-left:6px">+${p.points}</b>`:''}</span></div>`).join('');
-    el.innerHTML=`<div class="card" style="margin-bottom:10px"><div class="label" style="margin-bottom:8px">🔮 Predictions${d.finished?' & points':''}</div>${rows}</div>`;
-  }catch(e){}
+    const top=d.finished?Math.max(...d.predictions.map(p=>p.points||0)):null;
+    const rows=d.predictions.map(p=>{
+      const mine=p.is_me;
+      const win=d.finished&&top>0&&p.points===top;
+      return `<div class="between" style="font-size:13px;margin-bottom:6px;padding:5px 8px;border-radius:8px;${mine?'background:rgba(255,200,61,.1);border:1px solid rgba(255,200,61,.3)':''}">
+      <span><span class="avatar" style="width:22px;height:22px;font-size:10px;display:inline-flex;vertical-align:middle;background:${p.avatar_color}">${(p.username||'P').slice(0,2).toUpperCase()}</span> ${p.username}${mine?' <span class="gold" style="font-size:10px">(you)</span>':''}${win?' 🎯':''}</span>
+      <span class="mono">${p.home}–${p.away}${p.points!=null?` <b class="${p.points===5?'gold':p.points===2?'':'mut'}" style="margin-left:6px">+${p.points}</b>`:''}</span></div>`;
+    }).join('');
+    const hdr=d.finished&&d.score?`Predictions vs final ${d.score[0]}–${d.score[1]}`:'Predictions';
+    el.innerHTML=`<div class="card" style="margin-bottom:10px"><div class="label" style="margin-bottom:8px">🔮 ${hdr}</div>${rows}
+      ${d.finished?'<div class="mut" style="font-size:10px;margin-top:6px">🎯 best score · gold +5 exact · +2 correct result</div>':''}</div>`;
+  }catch(e){ el.innerHTML=''; }
 }
 function flagFor(name){
   const t=teams.find(t=>t.n===name);
@@ -2039,7 +2054,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v21 · results-scoring</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v22 · match-predictions</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
