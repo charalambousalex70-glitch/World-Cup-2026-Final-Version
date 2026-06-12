@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models import Allocation, Notification, Participant, Sweepstake
+from app.models import Allocation, Fixture, Notification, Participant, Sweepstake
 from app.services import football
 from app.services.scoring import compute_leaderboard
 from app.websocket.manager import manager
@@ -102,7 +102,10 @@ async def _poll_once() -> None:
                     for p in full.participants
                 ]
 
-                board = compute_leaderboard(full)
+                fixtures = (
+                    await db.execute(select(Fixture).where(Fixture.sweepstake_id == sweep_id))
+                ).scalars().all()
+                board = compute_leaderboard(full, fixtures)
                 await manager.broadcast(
                     str(sweep_id), "leaderboard_updated",
                     {"leaderboard": [r.model_dump() for r in board]},

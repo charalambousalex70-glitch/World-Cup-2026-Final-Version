@@ -206,7 +206,14 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
             for g in (m.get("goals") or [])
         ]
         ht = (m.get("score", {}).get("halfTime") or {})
-        detail = _json.dumps({"goals": goals, "ht": [ht.get("home"), ht.get("away")]}) if (goals or ht.get("home") is not None) else None
+        # 'winner' from the feed is HOME_TEAM / AWAY_TEAM / DRAW and already
+        # reflects penalty-shootout outcomes in knockout ties.
+        winner_code = (m.get("score") or {}).get("winner")
+        detail = _json.dumps({
+            "goals": goals,
+            "ht": [ht.get("home"), ht.get("away")],
+            "winner": winner_code,
+        }) if (goals or ht.get("home") is not None or winner_code) else None
 
         fx = existing.get(ext)
         if fx is None:
