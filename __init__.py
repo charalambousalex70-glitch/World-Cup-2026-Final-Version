@@ -1,46 +1,101 @@
-# START HERE — SweepStake Live (v3, hardened)
+"""SweepStake Live — FastAPI application entrypoint."""
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 
-This version fixes the fragile parts that caused setup pain. Key changes:
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
-1. **Backend URL is now editable on the live site** — no more editing code &
-   redeploying when your Render URL changes. Open the app, tap the **🔧** icon
-   (top bar, or the link on the sign-in screen), paste your backend URL, Save.
-2. **The DEMO/LIVE badge is now honest** — it shows **DEMO** (gold) when not
-   connected and **LIVE** (green) when connected. Tap DEMO to open settings.
-3. **Real error messages** — if it can't connect, the 🔧 panel tells you exactly
-   why (unreachable vs. CORS vs. login rejected) and shows the address to put in
-   CORS_ORIGINS.
-4. **No more cache trap** — the service worker is network-first for the page, so
-   new deploys show up immediately.
-5. **Auto-seed** — the backend loads the demo data itself on first boot. No more
-   running `python -m app.seed` in the Shell by hand.
-6. **CORS auto-allows *.vercel.app** — renaming your Vercel project won't break it.
+from app.api import auth, sweepstakes
+from app.core.config import settings
+from app.core.database import AsyncSessionLocal, Base, engine
+from app.services.poller import poll_loop
+from app.websocket import routes as ws_routes
 
-## Deploy (fresh)
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("startup")
 
-### Backend — Render
-1. New → **Blueprint**, point at this repo. It builds the API + Postgres.
-2. It will ask for `CORS_ORIGINS` — you can leave it blank now (the server also
-   auto-allows any `*.vercel.app` URL). Optionally paste your exact Vercel URL.
-3. Wait for **Live**. Visit `<your-api>/health` → `{"status":"ok",...}`.
-   The demo data seeds itself automatically.
 
-### Frontend — Vercel
-1. Add New → Project → this repo.
-2. **Root Directory: `frontend`**. Framework: Other. Deploy.
-3. Open the site, click **🔧**, paste your Render API URL, **Save & Reconnect**.
-4. Sign in: **you@example.com / demo1234** → should show **LIVE**.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables if they don't exist.
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        # Lightweight idempotent migration for columns added after launch.
+        # ADD COLUMN IF NOT EXISTS is safe to run on every boot.
+        try:
+            from sqlalchemy import text
+            for ddl in (
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS venue VARCHAR(160)",
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS referee VARCHAR(120)",
+                "ALTER TABLE fixtures ADD COLUMN IF NOT EXISTS detail TEXT",
+                "ALTER TABLE comments ADD COLUMN IF NOT EXISTS reactions TEXT",
+                "ALTER TABLE comments ALTER COLUMN user_id DROP NOT NULL",
+                "ALTER TABLE sweepstakes ADD COLUMN IF NOT EXISTS draw_audit TEXT",
+                "ALTER TABLE sweepstakes ADD COLUMN IF NOT EXISTS standings TEXT",
+            ):
+                await conn.execute(text(ddl))
+        except Exception:
+            pass  # never block startup on a migration nicety
 
-That's it. The 🔧 step replaces all the code-editing/redeploy/cache-clearing
-that used to be required.
+    # Auto-seed demo data on first boot so the app is usable immediately
+    # (no manual Shell step). Safe to run every boot: it no-ops if data exists.
+    if settings.AUTO_SEED:
+        try:
+            from app.models import User
+            from app.seed import seed
+            async with AsyncSessionLocal() as db:
+                # Check specifically for the demo user, not just any data, so a
+                # half-populated DB still gets the demo login created.
+                demo = (
+                    await db.execute(
+                        select(User.id).where(User.email == "you@example.com")
+                    )
+                ).scalar_one_or_none()
+            if not demo:
+                log.info("Demo user missing — running demo seed.")
+                await seed()
+            else:
+                log.info("Demo user present — skipping seed.")
+        except Exception:
+            log.exception("Auto-seed skipped due to error (app still starts).")
 
-## Quick fixes
-- **Stuck on DEMO?** Tap 🔧. The health line tells you if the backend is
-  reachable. If it says CORS, the panel shows the exact address to add to
-  `CORS_ORIGINS` on the Render service.
-- **Always test the real URL** (`https://....vercel.app`), never a downloaded
-  `index.html` from your computer.
+    task = asyncio.create_task(poll_loop())
+    yield
+    task.cancel()
 
-## Security
-Rotate the secrets that were visible during setup: regenerate the
-football-data.org key, set a fresh random `JWT_SECRET`, rotate the DB password.
+
+app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+
+# Allow the configured origins exactly, plus any *.vercel.app preview/prod URL
+# via regex — so renaming the Vercel project never breaks CORS again.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_list,
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router, prefix=settings.API_V1)
+app.include_router(sweepstakes.router, prefix=settings.API_V1)
+app.include_router(ws_routes.router)  # WebSockets are not under /api/v1
+
+
+@app.get("/", tags=["meta"])
+@app.head("/", tags=["meta"])
+async def root():
+    return {
+        "service": settings.PROJECT_NAME,
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
+@app.get("/health", tags=["meta"])
+async def health():
+    # 'build' lets you confirm which backend version is actually live on Render.
+    return {"status": "ok", "service": settings.PROJECT_NAME, "build": "v8-maxplayers"}

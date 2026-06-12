@@ -63,6 +63,8 @@ class Sweepstake(Base):
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), default="open")  # open|drawn|active|finished
     draw_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    draw_audit: Mapped[str | None] = mapped_column(Text)  # provably-fair audit JSON
+    standings: Mapped[str | None] = mapped_column(Text)  # cached group standings JSON
 
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -165,6 +167,8 @@ class Fixture(Base):
     status: Mapped[str] = mapped_column(String(20), default="SCHEDULED")  # SCHEDULED|LIVE|FINISHED
     stage: Mapped[str] = mapped_column(String(20), default="GROUP")
     venue: Mapped[str | None] = mapped_column(String(160))  # stadium, city
+    referee: Mapped[str | None] = mapped_column(String(120))
+    detail: Mapped[str | None] = mapped_column(Text)  # JSON: goals, halftime score
     kickoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -203,8 +207,23 @@ class Comment(Base):
     sweepstake_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True)
     body: Mapped[str] = mapped_column(String(500))
+    reactions: Mapped[str | None] = mapped_column(Text)  # JSON {"👍":["Alex"],...}
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     user: Mapped["User"] = relationship()
+
+
+class Prediction(Base):
+    """Score prediction side-game: 5 pts exact, 2 pts correct result."""
+    __tablename__ = "predictions"
+    __table_args__ = (UniqueConstraint("user_id", "fixture_id", name="uq_pred_user_fixture"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    sweepstake_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sweepstakes.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    fixture_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("fixtures.id", ondelete="CASCADE"), index=True)
+    home_pred: Mapped[int] = mapped_column(Integer)
+    away_pred: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

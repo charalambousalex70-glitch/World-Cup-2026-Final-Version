@@ -49,21 +49,39 @@ async def _poll_once() -> None:
         for sweep in active:
             sweep_id = sweep.id  # capture before any further loads
             try:
-                changed = await football.sync_fixtures(db, sweep)
-                if not changed:
+                changes = await football.sync_fixtures(db, sweep)
+
+                # Refresh cached group standings every cycle (cheap, resilient).
+                try:
+                    import json as _json
+                    standings = await football.fetch_standings(sweep.competition_code)
+                    if standings:
+                        sweep.standings = _json.dumps(standings)
+                        await db.flush()
+                except Exception:
+                    pass
+
+                if not changes:
                     continue
 
-                # Capture the changed fixtures' fields into plain dicts NOW,
-                # so later commits can't expire them and trigger lazy reloads
-                # (the source of the async "MissingGreenlet" error).
-                changed_data = [
-                    {
+                # Capture changed fixtures + their PREVIOUS state into plain dicts
+                # now (avoids async lazy-load issues, and lets us announce only
+                # genuine transitions rather than re-posting every poll).
+                import json as _json
+                changed_data = []
+                for ch in changes:
+                    fx = ch["fx"]
+                    try:
+                        goals_now = (_json.loads(fx.detail) or {}).get("goals", []) if fx.detail else []
+                    except Exception:
+                        goals_now = []
+                    changed_data.append({
                         "home": fx.home_team, "away": fx.away_team,
                         "hs": fx.home_score, "as_": fx.away_score,
                         "status": fx.status, "stage": fx.stage,
-                    }
-                    for fx in changed
-                ]
+                        "prev_status": ch["prev_status"], "prev_goals": ch["prev_goals"],
+                        "goals": goals_now,
+                    })
 
                 full = (
                     await db.execute(
@@ -79,7 +97,6 @@ async def _poll_once() -> None:
                     )
                 ).scalar_one()
 
-                # Snapshot participant -> (user_id, team_name) eagerly.
                 parts = [
                     (p.user_id, p.allocation.team.name if (p.allocation and p.allocation.team) else None)
                     for p in full.participants
@@ -91,9 +108,53 @@ async def _poll_once() -> None:
                     {"leaderboard": [r.model_dump() for r in board]},
                 )
 
-                # Build notifications from the captured plain data.
+                # ---- Goal Bot: ONLY kick-off, each new goal, red cards, full-time.
+                # Deduped by comparing against the previous state of each fixture.
+                from app.models import Comment
+
+                def _emit(msg):
+                    bot = Comment(sweepstake_id=sweep_id, user_id=None, body=msg[:500])
+                    db.add(bot)
+                    return bot
+
+                bot_msgs = []
                 for fxd in changed_data:
-                    if fxd["status"] != "FINISHED":
+                    home, away = fxd["home"], fxd["away"]
+                    hs, as_ = fxd.get("hs") or 0, fxd.get("as_") or 0
+                    prev, cur = fxd["prev_status"], fxd["status"]
+
+                    # Kick-off: SCHEDULED -> LIVE
+                    if cur == "LIVE" and prev in (None, "SCHEDULED"):
+                        bot_msgs.append(f"🟢 Kick-off! {home} vs {away}")
+
+                    # New goals: announce each goal added since last poll, with scorer.
+                    if cur in ("LIVE", "FINISHED"):
+                        new_goals = fxd["goals"][fxd["prev_goals"]:] if fxd["goals"] else []
+                        for g in new_goals:
+                            who = g.get("scorer") or "Goal"
+                            mins = f"{g['minute']}'" if g.get("minute") is not None else ""
+                            tm = g.get("team") or ""
+                            bot_msgs.append(f"⚽ GOAL {mins} {who} ({tm}) — {home} {hs}–{as_} {away}".replace("  ", " "))
+                        # Red cards (only if the feed provides them; usually absent on free tier)
+                        for rc in (fxd.get("reds") or []):
+                            bot_msgs.append(f"🟥 Red card: {rc}")
+
+                    # Full-time: -> FINISHED (announce once)
+                    if cur == "FINISHED" and prev != "FINISHED":
+                        bot_msgs.append(f"🏁 Full time: {home} {hs}–{as_} {away}")
+
+                for msg in bot_msgs:
+                    bot = _emit(msg)
+                    await db.flush()
+                    await manager.broadcast(str(sweep_id), "comment_added", {
+                        "id": str(bot.id), "body": bot.body,
+                        "created_at": bot.created_at.isoformat() if bot.created_at else None,
+                        "username": "⚽ Goal Bot", "avatar_color": "#ffc83d", "reactions": {},
+                    })
+
+                # Build per-user notifications only on full-time results.
+                for fxd in changed_data:
+                    if fxd["status"] != "FINISHED" or fxd["prev_status"] == "FINISHED":
                         continue
                     for user_id, tname in parts:
                         if not tname or tname not in (fxd["home"], fxd["away"]):

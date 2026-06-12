@@ -10,6 +10,7 @@ seed/sample data is used instead — handy for local dev and the demo.
 """
 from datetime import datetime, timezone
 
+import json as _json
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,6 +107,50 @@ async def fetch_teams(competition_code: str) -> list[dict]:
     ]
 
 
+async def fetch_standings(competition_code: str) -> dict:
+    """Return group standings keyed by group name.
+
+    {"Group A": [{"team","played","won","draw","lost","gf","ga","gd","points","position"}], ...}
+    Never raises — returns {} if the API/tier doesn't provide standings.
+    """
+    if is_offline() or not competition_code:
+        return {}
+    url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/standings"
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(url, headers=_headers())
+            r.raise_for_status()
+            data = r.json()
+    except Exception:
+        return {}
+    groups: dict = {}
+    for st in data.get("standings", []):
+        # WC group standings come as type TOTAL with a group like "GROUP_A".
+        if st.get("type") not in ("TOTAL", None):
+            continue
+        raw_group = st.get("group")
+        if raw_group:
+            gname = raw_group.replace("GROUP_", "Group ").replace("_", " ")
+            if not gname.startswith("Group"):
+                gname = gname[:1].upper() + gname[1:]
+        else:
+            gname = "Standings"
+        table = []
+        for row in st.get("table", []):
+            team = (row.get("team") or {}).get("name")
+            table.append({
+                "team": _norm_name(team),
+                "position": row.get("position"),
+                "played": row.get("playedGames"),
+                "won": row.get("won"), "draw": row.get("draw"), "lost": row.get("lost"),
+                "gf": row.get("goalsFor"), "ga": row.get("goalsAgainst"),
+                "gd": row.get("goalDifference"), "points": row.get("points"),
+            })
+        if table and (gname not in groups or len(table) > len(groups[gname])):
+            groups[gname] = table
+    return groups
+
+
 async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixture]:
     """Pull matches for the sweepstake's competition and upsert Fixture rows.
 
@@ -151,20 +196,41 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         stage = STAGE_MAP.get(m.get("stage", ""), "Group")
         kickoff = _parse_dt(m.get("utcDate"))
         venue = m.get("venue") or None
+        refs = m.get("referees") or []
+        referee = refs[0].get("name") if refs and isinstance(refs[0], dict) else None
+        # Compact detail JSON: goalscorers + halftime score when provided.
+        goals = [
+            {"minute": g.get("minute"), "scorer": (g.get("scorer") or {}).get("name"),
+             "team": (g.get("team") or {}).get("name"),
+             "assist": (g.get("assist") or {}).get("name")}
+            for g in (m.get("goals") or [])
+        ]
+        ht = (m.get("score", {}).get("halfTime") or {})
+        detail = _json.dumps({"goals": goals, "ht": [ht.get("home"), ht.get("away")]}) if (goals or ht.get("home") is not None) else None
 
         fx = existing.get(ext)
         if fx is None:
             fx = Fixture(sweepstake_id=sweepstake.id, external_id=ext)
             db.add(fx)
-            changed.append(fx)
+            changed.append({"fx": fx, "prev_status": None, "prev_hs": None,
+                            "prev_as": None, "prev_goals": 0})
         elif (fx.home_score, fx.away_score, fx.status, fx.home_team, fx.away_team) != (hs, as_, norm_status, home, away):
-            changed.append(fx)
+            prev_goals = 0
+            try:
+                prev_goals = len((_json.loads(fx.detail) or {}).get("goals", [])) if fx.detail else 0
+            except Exception:
+                prev_goals = 0
+            changed.append({"fx": fx, "prev_status": fx.status,
+                            "prev_hs": fx.home_score, "prev_as": fx.away_score,
+                            "prev_goals": prev_goals})
 
         fx.home_team, fx.away_team = home, away
         fx.home_score, fx.away_score = hs, as_
         fx.status, fx.stage = norm_status, stage
         fx.kickoff = kickoff
         fx.venue = venue
+        fx.referee = referee
+        fx.detail = detail
 
     await db.flush()
     if changed:
