@@ -182,6 +182,7 @@ class PredictionOut(BaseModel):
     fixture_id: uuid.UUID
     home: int
     away: int
+    mirrored: int = 0
 
 
 class PredBoardRow(BaseModel):
