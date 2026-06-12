@@ -3,6 +3,10 @@ import secrets
 import string
 import uuid
 
+import httpx
+
+from app.core.config import settings
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -568,20 +572,63 @@ async def draw_audit(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
 
 
 @router.get("/{sid}/standings")
-async def get_standings(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+async def get_standings(sid: uuid.UUID, refresh: bool = False,
+                        db: AsyncSession = Depends(get_db),
                         user: User = Depends(get_current_user)):
-    """Cached group standings (refreshed by the poller). {} until matches start."""
+    """Group standings. Serves the cached copy; if empty (or ?refresh=1),
+    fetches live from the feed right now so the table isn't blocked on the
+    background poller."""
     import json as _json
     sweep = await db.get(Sweepstake, sid)
     if not sweep:
         raise HTTPException(404, "Not found")
+    cached = {}
     try:
-        return _json.loads(sweep.standings) if sweep.standings else {}
+        cached = _json.loads(sweep.standings) if sweep.standings else {}
     except Exception:
-        return {}
+        cached = {}
+    if refresh or not cached:
+        live = await football.fetch_standings(sweep.competition_code)
+        if live:
+            sweep.standings = _json.dumps(live)
+            await db.flush()
+            return live
+    return cached
 
 
-@router.get("/{sid}/fixtures/{fid}/predictions")
+@router.get("/{sid}/standings/debug")
+async def standings_debug(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """Diagnostic: shows exactly what the feed returns for standings so we can
+    pinpoint whether the issue is the API, the plan, or our parsing."""
+    import json as _json
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    info = {
+        "competition_code": sweep.competition_code,
+        "api_key_configured": bool(settings.FOOTBALL_API_KEY),
+        "url": f"{settings.FOOTBALL_API_URL}/competitions/{sweep.competition_code}/standings",
+        "cached_groups": list((_json.loads(sweep.standings) if sweep.standings else {}).keys()),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(info["url"], headers=football._headers())
+            info["http_status"] = r.status_code
+            if r.status_code == 200:
+                data = r.json()
+                blocks = data.get("standings", [])
+                info["standings_blocks"] = len(blocks)
+                info["block_types"] = [b.get("type") for b in blocks]
+                info["block_groups"] = [b.get("group") for b in blocks]
+            else:
+                info["error_body"] = r.text[:300]
+    except Exception as e:
+        info["error"] = str(e)
+    parsed = await football.fetch_standings(sweep.competition_code)
+    info["parsed_groups"] = list(parsed.keys())
+    info["parsed_total_rows"] = sum(len(v) for v in parsed.values())
+    return info
 async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
                               db: AsyncSession = Depends(get_db),
                               user: User = Depends(get_current_user)):
@@ -613,3 +660,39 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
     out.sort(key=lambda r: (-(r["points"] or 0), r["username"].lower()))
     return {"locked": False, "finished": finished,
             "score": [fx.home_score, fx.away_score], "predictions": out}
+
+
+@router.get("/{sid}/standings/debug")
+async def standings_debug(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                          user: User = Depends(get_current_user)):
+    """Diagnostic: shows the competition code, raw feed status, and what the
+    standings parser produced — so we can see WHY a table is or isn't showing."""
+    import httpx
+    from app.core.config import settings
+    from app.services import football
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    info = {"competition_code": sweep.competition_code,
+            "api_key_configured": bool(getattr(settings, "FOOTBALL_API_KEY", None))}
+    url = f"{settings.FOOTBALL_API_URL}/competitions/{sweep.competition_code}/standings"
+    info["url"] = url
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(url, headers=football._headers())
+            info["http_status"] = r.status_code
+            try:
+                data = r.json()
+                info["standings_blocks"] = len(data.get("standings", []))
+                info["block_types"] = [s.get("type") for s in data.get("standings", [])][:8]
+                info["block_groups"] = [s.get("group") for s in data.get("standings", [])][:8]
+                info["error_message"] = data.get("message")
+            except Exception as e:
+                info["json_error"] = str(e)[:200]
+                info["body_snippet"] = r.text[:300]
+    except Exception as e:
+        info["request_error"] = str(e)[:200]
+    parsed = await football.fetch_standings(sweep.competition_code)
+    info["parsed_groups"] = list(parsed.keys())
+    info["parsed_total_rows"] = sum(len(v) for v in parsed.values())
+    return info

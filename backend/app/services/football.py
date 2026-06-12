@@ -125,10 +125,16 @@ async def fetch_standings(competition_code: str) -> dict:
         return {}
     groups: dict = {}
     for st in data.get("standings", []):
+        # WC group standings come as type TOTAL with a group like "GROUP_A".
         if st.get("type") not in ("TOTAL", None):
             continue
-        gname = st.get("group") or "Group"
-        gname = gname.replace("GROUP_", "Group ").title() if gname.startswith("GROUP") else gname
+        raw_group = st.get("group")
+        if raw_group:
+            gname = raw_group.replace("GROUP_", "Group ").replace("_", " ")
+            if not gname.startswith("Group"):
+                gname = gname[:1].upper() + gname[1:]
+        else:
+            gname = "Standings"
         table = []
         for row in st.get("table", []):
             team = (row.get("team") or {}).get("name")
@@ -140,7 +146,7 @@ async def fetch_standings(competition_code: str) -> dict:
                 "gf": row.get("goalsFor"), "ga": row.get("goalsAgainst"),
                 "gd": row.get("goalDifference"), "points": row.get("points"),
             })
-        if table:
+        if table and (gname not in groups or len(table) > len(groups[gname])):
             groups[gname] = table
     return groups
 
