@@ -46,20 +46,28 @@ async def _poll_once() -> None:
             )
         ).scalars().all()
 
+        # Fetch each competition's feed ONCE, then apply to every league on it.
+        # This means all leagues update from the same snapshot simultaneously
+        # (no per-league lag) and we make far fewer API calls.
+        import json as _json
+        codes = {s.competition_code for s in active if s.competition_code}
+        matches_by_code: dict = {}
+        standings_by_code: dict = {}
+        for code in codes:
+            matches_by_code[code] = await football.fetch_matches(code)
+            standings_by_code[code] = await football.fetch_standings(code)
+
         for sweep in active:
             sweep_id = sweep.id  # capture before any further loads
             try:
-                changes = await football.sync_fixtures(db, sweep)
+                shared_matches = matches_by_code.get(sweep.competition_code)
+                changes = await football.sync_fixtures(db, sweep, matches=shared_matches)
 
-                # Refresh cached group standings every cycle (cheap, resilient).
-                try:
-                    import json as _json
-                    standings = await football.fetch_standings(sweep.competition_code)
-                    if standings:
-                        sweep.standings = _json.dumps(standings)
-                        await db.flush()
-                except Exception:
-                    pass
+                # Apply the shared standings snapshot (already fetched once).
+                standings = standings_by_code.get(sweep.competition_code)
+                if standings:
+                    sweep.standings = _json.dumps(standings)
+                    await db.flush()
 
                 if not changes:
                     continue
@@ -67,7 +75,6 @@ async def _poll_once() -> None:
                 # Capture changed fixtures + their PREVIOUS state into plain dicts
                 # now (avoids async lazy-load issues, and lets us announce only
                 # genuine transitions rather than re-posting every poll).
-                import json as _json
                 changed_data = []
                 for ch in changes:
                     fx = ch["fx"]

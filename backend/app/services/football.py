@@ -151,23 +151,35 @@ async def fetch_standings(competition_code: str) -> dict:
     return groups
 
 
-async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixture]:
-    """Pull matches for the sweepstake's competition and upsert Fixture rows.
-
-    Returns the list of fixtures whose score/status actually changed, so the
-    caller can broadcast just the deltas.
-    """
-    if is_offline() or not sweepstake.competition_code:
+async def fetch_matches(competition_code: str) -> list:
+    """Fetch raw match list for a competition once (so it can be shared across
+    all leagues on that competition in a single poll cycle)."""
+    if is_offline() or not competition_code:
         return []
-
-    url = f"{settings.FOOTBALL_API_URL}/competitions/{sweepstake.competition_code}/matches"
+    url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/matches"
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(url, headers=_headers())
             r.raise_for_status()
-            matches = r.json().get("matches", [])
+            return r.json().get("matches", [])
     except Exception:
-        # Slow/failed/rate-limited API: skip this cycle quietly.
+        return []
+
+
+async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake, matches=None) -> list[Fixture]:
+    """Pull matches for the sweepstake's competition and upsert Fixture rows.
+
+    Returns the list of fixtures whose score/status actually changed, so the
+    caller can broadcast just the deltas. If `matches` is provided (pre-fetched
+    by the caller), no network call is made — this lets one fetch serve every
+    league on the same competition in the same cycle.
+    """
+    if is_offline() or not sweepstake.competition_code:
+        return []
+
+    if matches is None:
+        matches = await fetch_matches(sweepstake.competition_code)
+    if not matches:
         return []
 
     existing = {
