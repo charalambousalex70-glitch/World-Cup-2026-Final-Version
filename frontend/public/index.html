@@ -940,11 +940,12 @@ window.savePrediction=async(fid)=>{
   const h=+($('#ph')||{}).value, a=+($('#pa')||{}).value;
   if(isNaN(h)||isNaN(a)||h<0||a<0){toast('Enter both scores','✏️');return;}
   try{
-    await apiReq(`/sweepstakes/${CUR_SWEEP.id}/predictions`,{method:'POST',
+    const res=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/predictions`,{method:'POST',
       body:{fixture_id:fid,home:h,away:a}});
     if(!MY_PREDS)MY_PREDS={};
     MY_PREDS[fid]={home:h,away:a};
-    toast(`Prediction saved: ${h}–${a} 🔮`,'✅');
+    const extra=(res&&res.mirrored)?` · also applied to ${res.mirrored} other ${res.mirrored===1?'league':'leagues'}`:'';
+    toast(`Prediction saved: ${h}–${a} 🔮${extra}`,'✅');
     const m=document.querySelector('.modal'); if(m)m.remove();
   }catch(e){toast('Could not save: '+(e.message||'error'),'⚠️');}
 };
@@ -1945,12 +1946,17 @@ async function selectLeague(id){
   loadExclusionsFor(id);   // switch to THIS league's exclusion set
   HAS_SWEEPSTAKE=true;
   startLive(s.id);
-  await refreshLive();
-  await loadFixtures();
-  await loadComments();    // so Recent Activity can seed from recent chat
-  await loadActivity();
-  loadPredictions(); loadStandings();
+  // Show the home view straight away, then load live data in parallel and
+  // re-render as each piece arrives — far snappier than awaiting in series.
   view='home'; render();
+  await refreshLive();                       // leaderboard first (drives the home view)
+  Promise.all([
+    loadFixtures(),
+    loadComments(),
+    loadActivity(),
+    loadPredictions(),
+    loadStandings(),
+  ]).then(()=>render());
 }
 window.openLeague=async(id)=>{ try{await selectLeague(id);}catch(e){toast('Could not open league','⚠️');} };
 
@@ -2054,7 +2060,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v23 · stage-progression-fix</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v25 · shared-predictions-faster</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
