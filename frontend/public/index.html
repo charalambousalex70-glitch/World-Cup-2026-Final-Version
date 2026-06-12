@@ -880,11 +880,12 @@ function lbRow(x,i,allRanked){
     : x.stage?`<span class="tag live">${x.stage}</span>`
     : '<span class="tag" style="opacity:.6">—</span>';   // no draw yet
   const pts = (x.pts!=null && !isNaN(x.pts)) ? x.pts : '–';
+  const rec=(x.p.wins!=null)?`<span class="mut" style="font-size:11px">· ${x.p.wins}W ${x.p.draws}D ${x.p.losses}L</span>`:'';
   return `<div class="lb ${i<3?'r'+(i+1):''} ${me?'me':''}">
     <div class="pos">${i+1}</div>
     <div class="avatar" style="background:${x.p.col}">${x.p.av}</div>
     <div style="flex:1"><div style="font-weight:700;font-size:15px">${x.p.name}${me?' <span class="gold" style="font-size:11px">(you)</span>':''} ${badges}</div>
-      <div class="mut row" style="gap:5px;font-size:13px">${flagImg(t.n,15)}${t.n}</div></div>
+      <div class="mut row" style="gap:5px;font-size:13px">${flagImg(t.n,15)}${t.n} ${rec}</div></div>
     ${tag}
     <div class="mono gold" style="font-weight:700;min-width:34px;text-align:right">${pts}</div>
   </div>`;
@@ -1060,13 +1061,11 @@ function vBoard(s){
     <div class="card" style="padding:13px"><div class="between"><span class="mut" style="font-size:13px">${drawn?'Live ranking · updates as results come in':`${players.length} joined · teams assigned at the draw`}</span><span class="live"><span class="dot"></span>${drawn?'LIVE':players.length+' IN'}</span></div></div>
     <div class="stagger">${r.map((x,i)=>lbRow(x,i,r)).join('')}</div>
     <div class="card" style="font-size:12px">
-      <div class="label" style="margin-bottom:8px">Scoring</div>
-      <div class="between mut"><span>Group stage</span><span class="mono">10 pts</span></div>
-      <div class="between mut"><span>Round of 16</span><span class="mono">25 pts</span></div>
-      <div class="between mut"><span>Quarter-final</span><span class="mono">45 pts</span></div>
-      <div class="between mut"><span>Semi-final</span><span class="mono">70 pts</span></div>
-      <div class="between mut"><span>Final</span><span class="mono">90 pts</span></div>
-      <div class="between"><span class="gold">Champion</span><span class="mono gold">120 pts</span></div>
+      <div class="label" style="margin-bottom:8px">Scoring — by match result</div>
+      <div class="between"><span class="gold">Win</span><span class="mono gold">+3 pts</span></div>
+      <div class="between mut"><span>Draw</span><span class="mono">+1 pt</span></div>
+      <div class="between mut"><span>Loss</span><span class="mono">0 pts</span></div>
+      <div class="mut" style="font-size:11px;margin-top:8px;line-height:1.5">Everyone starts at 0. Your team earns points every match, all tournament long. In the knockouts, a penalty-shootout win counts as a win.</div>
     </div>
 
     <div class="between" style="margin-top:6px"><div class="label">League Chat</div><span style="font-size:13px;cursor:pointer" onclick="toggleChatNotifs()" title="Enable notifications">🔔 <span class="mut" style="font-size:11px">notify me</span></span></div>
@@ -1831,9 +1830,10 @@ function applyLeaderboard(rows){
     let ti=teams.findIndex(t=>t.n===row.team_name);
     if(ti<0){teams.push({n:row.team_name,e:row.flag_emoji,c:'#888'});ti=teams.length-1}
     players.push({id:row.participant_id,name:row.participant_name,
-      av:row.participant_name.slice(0,2).toUpperCase(),col:row.avatar_color});
+      av:row.participant_name.slice(0,2).toUpperCase(),col:row.avatar_color,
+      wins:row.wins,draws:row.draws,losses:row.losses});
     alloc.push(ti); stages.push(row.stage);
-    PTS.push(row.points);   // authoritative points from the backend (incl. group-position bonus)
+    PTS.push(row.points);   // authoritative points from the backend (results-based)
   });
 }
 async function refreshLive(){
@@ -2039,7 +2039,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v20 · leaderboard-points-fix</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v21 · results-scoring</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
