@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # Football data API (https://www.football-data.org or API-FOOTBALL)
     FOOTBALL_API_URL: str = "https://api.football-data.org/v4"
     FOOTBALL_API_KEY: str = ""
-    FOOTBALL_POLL_SECONDS: int = 60  # how often to poll for live results
+    FOOTBALL_POLL_SECONDS: int = 30  # how often to poll for live results
 
     # Load demo data (the "Office World Cup" with fake players) on first boot.
     # Default OFF so real users start with a clean, empty app. Set AUTO_SEED=true
