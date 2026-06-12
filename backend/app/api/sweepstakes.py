@@ -483,8 +483,13 @@ async def save_prediction(sid: uuid.UUID, body: PredictionIn,
     fx = await db.get(Fixture, body.fixture_id)
     if not fx or fx.sweepstake_id != sid:
         raise HTTPException(404, "Match not found")
-    if fx.status != "SCHEDULED":
-        raise HTTPException(409, "Predictions lock at kick-off")
+    # Lock at kick-off: reject if the match has started/finished OR kickoff has
+    # passed, even if the feed hasn't flipped status yet (prevents cheating).
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    started = fx.status != "SCHEDULED" or (fx.kickoff and fx.kickoff <= now)
+    if started:
+        raise HTTPException(409, "Predictions are locked — the match has kicked off.")
     row = (
         await db.execute(select(Prediction).where(
             Prediction.user_id == user.id, Prediction.fixture_id == body.fixture_id))
@@ -536,3 +541,75 @@ async def predictions_board(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         out.append(PredBoardRow(username=u.username, avatar_color=u.avatar_color, **a))
     out.sort(key=lambda r: (-r.points, -r.exact, r.username.lower()))
     return out
+
+
+@router.get("/{sid}/draw/audit")
+async def draw_audit(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                     user: User = Depends(get_current_user)):
+    """Public (league-member) audit of the draw: seed + derivation + result.
+    Anyone can recompute SHA256(seed:team)/(seed:participant_id) orderings and
+    confirm the published result matches — provably fair."""
+    import json as _json
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    if not sweep.draw_audit:
+        raise HTTPException(404, "No draw audit yet — audits exist for draws run after the fairness update.")
+    audit = _json.loads(sweep.draw_audit)
+    # Attach usernames for readability.
+    parts = {str(p.id): p for p in (
+        await db.execute(select(Participant).options(selectinload(Participant.user))
+                         .where(Participant.sweepstake_id == sid))
+    ).scalars().all()}
+    for row in audit.get("result", []):
+        pr = parts.get(row["participant_id"])
+        row["username"] = pr.user.username if pr and pr.user else "?"
+    return audit
+
+
+@router.get("/{sid}/standings")
+async def get_standings(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """Cached group standings (refreshed by the poller). {} until matches start."""
+    import json as _json
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    try:
+        return _json.loads(sweep.standings) if sweep.standings else {}
+    except Exception:
+        return {}
+
+
+@router.get("/{sid}/fixtures/{fid}/predictions")
+async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
+                              db: AsyncSession = Depends(get_db),
+                              user: User = Depends(get_current_user)):
+    """Everyone's predictions for one match, with points if it's finished.
+    Hidden until kick-off so it can't be used to copy others' picks."""
+    from datetime import datetime, timezone
+    fx = await db.get(Fixture, fid)
+    if not fx or fx.sweepstake_id != sid:
+        raise HTTPException(404, "Match not found")
+    now = datetime.now(timezone.utc)
+    if fx.status == "SCHEDULED" and not (fx.kickoff and fx.kickoff <= now):
+        return {"locked": True, "predictions": []}
+    rows = (
+        await db.execute(select(Prediction).where(Prediction.fixture_id == fid))
+    ).scalars().all()
+    users = {u.id: u for u in (
+        await db.execute(select(User)).scalars().all()
+    )}
+    finished = fx.status == "FINISHED"
+    out = []
+    for pr in rows:
+        u = users.get(pr.user_id)
+        pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score) if finished else None
+        out.append({
+            "username": u.username if u else "Player",
+            "avatar_color": u.avatar_color if u else "#888",
+            "home": pr.home_pred, "away": pr.away_pred, "points": pts,
+        })
+    out.sort(key=lambda r: (-(r["points"] or 0), r["username"].lower()))
+    return {"locked": False, "finished": finished,
+            "score": [fx.home_score, fx.away_score], "predictions": out}

@@ -63,6 +63,8 @@ class Sweepstake(Base):
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), default="open")  # open|drawn|active|finished
     draw_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    draw_audit: Mapped[str | None] = mapped_column(Text)  # provably-fair audit JSON
+    standings: Mapped[str | None] = mapped_column(Text)  # cached group standings JSON
 
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

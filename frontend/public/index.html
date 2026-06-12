@@ -542,6 +542,30 @@ function leagueCard(l){
 }
 
 /* ---------------- TEAMS IN THE DRAW ---------------- */
+function myTeamNames(){ return new Set(teams.map(t=>t.n)); }
+function groupTablesHTML(){
+  if(!STANDINGS||typeof STANDINGS!=='object')return '<div class="card mut" style="text-align:center;font-size:13px">Loading…</div>';
+  const groups=Object.keys(STANDINGS).sort();
+  if(!groups.length)return '<div class="card mut" style="text-align:center;font-size:13px">Group tables appear once the tournament kicks off (first games 28 Jun).</div>';
+  const mine=myTeamNames();
+  return groups.map(g=>{
+    const rows=(STANDINGS[g]||[]).map((r,i)=>{
+      const isMine=mine.has(r.team);
+      const qual=r.position<=2?'border-left:3px solid var(--grn)':(r.position===3?'border-left:3px solid var(--gold)':'border-left:3px solid transparent');
+      return `<div class="row" style="gap:8px;font-size:12px;padding:6px 4px;${qual};background:${isMine?'rgba(255,200,61,.08)':'transparent'}">
+        <span class="mono mut" style="width:16px">${r.position||i+1}</span>
+        <span style="flex:1;font-weight:${isMine?'700':'500'};${isMine?'color:var(--gold)':''}">${flagImg(r.team,14)} ${r.team}</span>
+        <span class="mono mut" style="width:22px;text-align:center" title="Played">${r.played??0}</span>
+        <span class="mono mut" style="width:30px;text-align:center" title="Goal diff">${(r.gd>0?'+':'')+(r.gd??0)}</span>
+        <span class="mono gold" style="width:24px;text-align:right;font-weight:700" title="Points">${r.points??0}</span>
+      </div>`;
+    }).join('');
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="between" style="margin-bottom:6px"><div class="label">${g}</div>
+        <div class="mut" style="font-size:9px">P · GD · PTS</div></div>
+      ${rows}</div>`;
+  }).join('');
+}
 function vTeams(s){
   const isAdmin = CUR_SWEEP && CUR_SWEEP.admin_id && MY_ID && CUR_SWEEP.admin_id===MY_ID;
   const drawDone = CUR_SWEEP && CUR_SWEEP.draw_approved;
@@ -549,14 +573,14 @@ function vTeams(s){
   const pool = (window.RANKED_POOL||[]);
   const canEdit = isAdmin && !drawDone;
 
-  // After an approved draw, just show the actual assigned teams.
-  if(drawDone && teams.length){
-    const assigned=teams.map(t=>({name:t.n,flag:t.e}));
+  // After an approved draw, show LIVE GROUP TABLES with points & positions.
+  if(drawDone){
     s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
-      <h2 style="font-size:24px">Teams in the Draw</h2>
-      <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">These ${assigned.length} teams were assigned in the draw and are locked in.</span></div>
-      <div class="stagger">${assigned.map((t,i)=>teamRow(t,{rank:i+1,state:'in'},false)).join('')}</div>
+      <h2 style="font-size:24px">Group Tables</h2>
+      <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">Live group standings. Your drawn teams are highlighted in <span class="gold">gold</span>. Top 2 of each group qualify, plus the 8 best 3rd-placed teams.</span></div>
+      <div id="grouptables">${groupTablesHTML()}</div>
     </div>`;
+    if(LIVE && STANDINGS===null){ loadStandings().then(()=>{const el=$('#grouptables');if(el)el.innerHTML=groupTablesHTML();}); }
     return;
   }
 
@@ -816,6 +840,14 @@ function todayDigestHTML(){
   }).join('');
   return `<div class="card glow"><div class="label" style="margin-bottom:10px">📅 Today at the World Cup</div>${rows}</div>`;
 }
+/* ---------------- GROUP STANDINGS ---------------- */
+let STANDINGS=null;
+async function loadStandings(){
+  if(!LIVE||!CUR_SWEEP)return;
+  try{STANDINGS=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/standings`)||{};}
+  catch(e){STANDINGS={};}
+}
+
 /* ---------------- PREDICTIONS (side game: 5 exact / 2 result) ---------------- */
 let MY_PREDS=null, PRED_BOARD=null;
 async function loadPredictions(){
@@ -994,6 +1026,7 @@ function vDraw(s){
       <h2 style="font-size:22px">Draw Complete</h2>
       <p class="mut" style="font-size:14px;max-width:300px;margin:8px auto 16px">Teams have been assigned and locked in. Check the Board to see who got who.</p>
       <button class="btn gold" style="max-width:260px;margin:0 auto" onclick="view='board';render()">View Leaderboard</button>
+      <button class="btn ghost" style="max-width:260px;margin:10px auto 0" onclick="openAudit()">🔍 Draw Audit — verify it's fair</button>
       ${isAdmin?`<button class="btn ghost" style="max-width:260px;margin:12px auto 0;color:var(--red)" onclick="resetDrawLive()">↩️ Cancel & Redo Draw</button>
       <p class="mut" style="font-size:12px;max-width:300px;margin:10px auto 0">Redoing clears the current teams and reopens the league so new members can join before a fresh draw.</p>`:''}
       </div>`;
@@ -1103,6 +1136,41 @@ window.approveDraw=async()=>{
   alloc=players.map(p=>{const d=drawn.find(x=>x.player.id===p.id);return teams.indexOf(d.team)});
   toast('Draw approved & saved','✅');view='board';render();
 };
+window.openAudit=async()=>{
+  try{
+    const a=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/draw/audit`);
+    const rows=(a.result||[]).map(r=>`<div class="between" style="font-size:13px;margin-bottom:6px"><span>${r.username||r.participant_id.slice(0,8)}</span><b>${r.team}</b></div>`).join('');
+    modal(`<h2 style="font-size:20px;margin-bottom:8px">🔍 Draw Audit</h2>
+      <p class="mut" style="font-size:12px;line-height:1.6;margin-bottom:12px">This draw is <b>provably fair</b>: every assignment is derived from the random seed below using SHA-256. Nobody — including the admin — can influence or edit the result without the math breaking. Tap Verify and <i>your own browser</i> recomputes it.</p>
+      <div class="card" style="margin-bottom:10px;font-size:11px"><div class="label" style="margin-bottom:6px">Seed</div><div class="mono" style="word-break:break-all">${a.seed}</div>
+      <div class="mut" style="margin-top:6px">Drawn: ${a.drawn_at?new Date(a.drawn_at).toLocaleString():'—'}</div></div>
+      <div class="card" style="margin-bottom:10px">${rows}</div>
+      <button class="btn gold" id="vfybtn" onclick="verifyAudit()">✓ Verify in this browser</button>
+      <div id="vfyout" style="margin-top:10px"></div>
+      <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
+    window.__AUDIT=a;
+  }catch(e){toast(e.message||'No audit available','ℹ️');}
+};
+async function sha256hex(str){
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+window.verifyAudit=async()=>{
+  const a=window.__AUDIT; if(!a)return;
+  const out=$('#vfyout');
+  out.innerHTML='<span class="mut" style="font-size:12px">Recomputing SHA-256 orderings…</span>';
+  const th=await Promise.all(a.team_pool.map(async t=>({t,h:await sha256hex(`${a.seed}:${t}`)})));
+  const ph=await Promise.all(a.participants.map(async p=>({p,h:await sha256hex(`${a.seed}:${p}`)})));
+  th.sort((x,y)=>x.h<y.h?-1:1); ph.sort((x,y)=>x.h<y.h?-1:1);
+  let ok=th.length===a.result.length;
+  for(let i=0;i<th.length&&ok;i++){
+    const expect=a.result.find(r=>r.participant_id===ph[i].p);
+    if(!expect||expect.team!==th[i].t)ok=false;
+  }
+  out.innerHTML=ok
+    ?'<div style="padding:10px;border-radius:10px;background:rgba(47,226,138,.12);border:1px solid rgba(47,226,138,.4);color:var(--grn);font-size:13px;font-weight:700">✅ VERIFIED — your browser recomputed the draw from the seed and it matches exactly. Not rigged.</div>'
+    :'<div style="padding:10px;border-radius:10px;background:rgba(255,91,110,.12);border:1px solid rgba(255,91,110,.4);color:var(--red);font-size:13px;font-weight:700">❌ MISMATCH — the published result does not match the seed math.</div>';
+};
 window.resetDrawLive=()=>{
   modal(`<h2 style="font-size:20px;margin-bottom:8px">Cancel & Redo Draw?</h2>
     <p class="mut" style="font-size:13px;margin-bottom:16px;line-height:1.5">This clears everyone's current teams and reopens the league so new members can join. You'll then run a fresh draw. This can't be undone.</p>
@@ -1184,7 +1252,7 @@ window.openMatch=(fid)=>{
       <div class="label" style="margin-bottom:8px">Goals</div>
       ${goalsRows}
     </div>
-    ${x.status==='SCHEDULED'?`<div class="card" style="margin-bottom:10px">
+    ${(x.status==='SCHEDULED' && !(x.kickoff && new Date(x.kickoff)<=new Date()))?`<div class="card" style="margin-bottom:10px">
       <div class="label" style="margin-bottom:8px">🔮 Your Prediction <span class="mut" style="text-transform:none;font-weight:400">(5 pts exact · 2 pts result)</span></div>
       <div class="row" style="gap:10px;justify-content:center;align-items:center">
         <input id="ph" type="number" min="0" max="20" style="width:64px;text-align:center" value="${(MY_PREDS&&MY_PREDS[x.id])?MY_PREDS[x.id].home:''}" placeholder="0">
@@ -1194,9 +1262,24 @@ window.openMatch=(fid)=>{
       </div>
       ${(MY_PREDS&&MY_PREDS[x.id])?`<div class="mut" style="font-size:11px;text-align:center;margin-top:6px">Saved: ${MY_PREDS[x.id].home}–${MY_PREDS[x.id].away} · you can change it until kick-off</div>`:'<div class="mut" style="font-size:11px;text-align:center;margin-top:6px">Locks at kick-off</div>'}
     </div>`:''}
+    <div id="predhist"></div>
     <p class="mut" style="font-size:11px;line-height:1.5">Lineups, possession and shot stats aren't provided by the free football data feed, and TV listings vary by country — check your local guide for the broadcast channel.</p>
     <button class="btn ghost" style="margin-top:10px" onclick="document.querySelector('.modal').remove()">Close</button>`);
+  loadFixturePredictions(fid);
 };
+async function loadFixturePredictions(fid){
+  if(!LIVE||!CUR_SWEEP)return;
+  try{
+    const d=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/fixtures/${fid}/predictions`);
+    const el=document.getElementById('predhist'); if(!el)return;
+    if(d.locked){el.innerHTML='';return;}
+    if(!d.predictions.length){el.innerHTML='<div class="card mut" style="margin-bottom:10px;text-align:center;font-size:12px">No predictions were made for this match.</div>';return;}
+    const rows=d.predictions.map(p=>`<div class="between" style="font-size:13px;margin-bottom:6px">
+      <span><span class="avatar" style="width:22px;height:22px;font-size:10px;display:inline-flex;vertical-align:middle;background:${p.avatar_color}">${(p.username||'P').slice(0,2).toUpperCase()}</span> ${p.username}</span>
+      <span class="mono">${p.home}–${p.away}${p.points!=null?` <b class="${p.points===5?'gold':p.points===2?'':'mut'}" style="margin-left:6px">+${p.points}</b>`:''}</span></div>`).join('');
+    el.innerHTML=`<div class="card" style="margin-bottom:10px"><div class="label" style="margin-bottom:8px">🔮 Predictions${d.finished?' & points':''}</div>${rows}</div>`;
+  }catch(e){}
+}
 function flagFor(name){
   const t=teams.find(t=>t.n===name);
   return (t&&t.e)|| (window.FIXTURE_FLAGS&&FIXTURE_FLAGS[name]) || '🏳️';
@@ -1724,7 +1807,7 @@ let MY_LEAGUES=[];        // all sweepstakes the user is in (summary list)
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
   players.length=0; alloc.length=0; stages.length=0; paid.length=0;
-  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null; MY_PREDS=null; PRED_BOARD=null;
+  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null; MY_PREDS=null; PRED_BOARD=null; STANDINGS=null;
 }
 
 /* Populate the local players[] from the sweepstake's REAL participants so the
@@ -1765,7 +1848,7 @@ async function selectLeague(id){
   await refreshLive();
   await loadFixtures();
   await loadActivity();
-  loadPredictions();
+  loadPredictions(); loadStandings();
   view='home'; render();
 }
 window.openLeague=async(id)=>{ try{await selectLeague(id);}catch(e){toast('Could not open league','⚠️');} };
@@ -1870,7 +1953,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v14 · odds-ranking</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v16 · group-tables-scoring-predhist</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);

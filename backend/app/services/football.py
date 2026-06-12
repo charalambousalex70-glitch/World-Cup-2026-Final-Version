@@ -107,6 +107,44 @@ async def fetch_teams(competition_code: str) -> list[dict]:
     ]
 
 
+async def fetch_standings(competition_code: str) -> dict:
+    """Return group standings keyed by group name.
+
+    {"Group A": [{"team","played","won","draw","lost","gf","ga","gd","points","position"}], ...}
+    Never raises — returns {} if the API/tier doesn't provide standings.
+    """
+    if is_offline() or not competition_code:
+        return {}
+    url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/standings"
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            r = await client.get(url, headers=_headers())
+            r.raise_for_status()
+            data = r.json()
+    except Exception:
+        return {}
+    groups: dict = {}
+    for st in data.get("standings", []):
+        if st.get("type") not in ("TOTAL", None):
+            continue
+        gname = st.get("group") or "Group"
+        gname = gname.replace("GROUP_", "Group ").title() if gname.startswith("GROUP") else gname
+        table = []
+        for row in st.get("table", []):
+            team = (row.get("team") or {}).get("name")
+            table.append({
+                "team": _norm_name(team),
+                "position": row.get("position"),
+                "played": row.get("playedGames"),
+                "won": row.get("won"), "draw": row.get("draw"), "lost": row.get("lost"),
+                "gf": row.get("goalsFor"), "ga": row.get("goalsAgainst"),
+                "gd": row.get("goalDifference"), "points": row.get("points"),
+            })
+        if table:
+            groups[gname] = table
+    return groups
+
+
 async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixture]:
     """Pull matches for the sweepstake's competition and upsert Fixture rows.
 
@@ -168,9 +206,17 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
         if fx is None:
             fx = Fixture(sweepstake_id=sweepstake.id, external_id=ext)
             db.add(fx)
-            changed.append(fx)
+            changed.append({"fx": fx, "prev_status": None, "prev_hs": None,
+                            "prev_as": None, "prev_goals": 0})
         elif (fx.home_score, fx.away_score, fx.status, fx.home_team, fx.away_team) != (hs, as_, norm_status, home, away):
-            changed.append(fx)
+            prev_goals = 0
+            try:
+                prev_goals = len((_json.loads(fx.detail) or {}).get("goals", [])) if fx.detail else 0
+            except Exception:
+                prev_goals = 0
+            changed.append({"fx": fx, "prev_status": fx.status,
+                            "prev_hs": fx.home_score, "prev_as": fx.away_score,
+                            "prev_goals": prev_goals})
 
         fx.home_team, fx.away_team = home, away
         fx.home_score, fx.away_score = hs, as_

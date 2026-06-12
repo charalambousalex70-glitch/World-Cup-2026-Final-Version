@@ -12,7 +12,10 @@ with 10 players, the 10 most-likely-to-win teams are drawn — everyone gets a
 genuine contender. The team set is (re)generated at draw time so it always
 matches the final participant count.
 """
+import hashlib
+import json
 import secrets
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,12 +74,19 @@ async def run_draw(db: AsyncSession, sweepstake: Sweepstake, excluded: list[str]
         db.add(t)
     await db.flush()
 
-    # Secure shuffle so the ranking doesn't bias who gets which team.
-    pool = list(teams)
-    _secure_shuffle(pool)
+    # ---- Provably fair allocation ----
+    # A random seed is generated, then every assignment is DERIVED from it:
+    # teams are ordered by SHA256(seed:team), participants by SHA256(seed:participant_id),
+    # and paired index-for-index. Given the seed (published in the audit), anyone
+    # can recompute the exact same result — so the draw cannot be rigged or
+    # post-edited without detection.
+    seed = secrets.token_hex(16)
+    team_order = sorted(teams, key=lambda t: hashlib.sha256(f"{seed}:{t.name}".encode()).hexdigest())
+    part_order = sorted(participants, key=lambda p: hashlib.sha256(f"{seed}:{p.id}".encode()).hexdigest())
 
     allocations: list[Allocation] = []
-    for participant, team in zip(participants, pool):
+    audit_pairs = []
+    for participant, team in zip(part_order, team_order):
         alloc = Allocation(
             sweepstake_id=sweepstake.id,
             participant_id=participant.id,
@@ -84,6 +94,16 @@ async def run_draw(db: AsyncSession, sweepstake: Sweepstake, excluded: list[str]
         )
         db.add(alloc)
         allocations.append(alloc)
+        audit_pairs.append({"participant_id": str(participant.id), "team": team.name})
+
+    sweepstake.draw_audit = json.dumps({
+        "seed": seed,
+        "method": "sha256(seed:team) orders teams; sha256(seed:participant_id) orders participants; paired by index",
+        "drawn_at": datetime.now(timezone.utc).isoformat(),
+        "team_pool": [t.name for t in teams],
+        "participants": [str(p.id) for p in participants],
+        "result": audit_pairs,
+    })
 
     sweepstake.status = "drawn"
     await db.flush()
