@@ -246,45 +246,78 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake) -> list[Fixtur
 
 
 async def _recompute_team_stages(db: AsyncSession, sweepstake: Sweepstake) -> None:
-    """Derive each team's furthest reached stage from finished fixtures.
+    """Derive each team's current stage from the fixtures it appears in.
 
-    A team that lost a knockout match is marked eliminated at that round; a team
-    that won the Final becomes 'Winner'.
+    A team's stage = the furthest knockout round it has a fixture in (being
+    scheduled for the R16 means it qualified and is 'in the R16'). A team that
+    LOST a knockout tie is eliminated at the round it lost in. Winning the Final
+    makes it 'Winner'. Everyone stays 'Group' through the group phase regardless
+    of group results.
     """
     teams = (
         await db.execute(select(Team).where(Team.sweepstake_id == sweepstake.id))
     ).scalars().all()
-    fixtures = (
-        await db.execute(
-            select(Fixture).where(
-                Fixture.sweepstake_id == sweepstake.id, Fixture.status == "FINISHED"
-            )
-        )
+    all_fx = (
+        await db.execute(select(Fixture).where(Fixture.sweepstake_id == sweepstake.id))
     ).scalars().all()
 
     by_name = {t.name: t for t in teams}
-    for fx in fixtures:
-        if fx.home_score is None or fx.away_score is None:
+    # Reset, then promote based on the rounds each team is scheduled in.
+    for t in teams:
+        t.stage = "Group"
+        t.eliminated = False
+
+    for fx in all_fx:
+        rnd = fx.stage  # Group | R16 | QF | SF | Final
+        if rnd == "Group":
             continue
-        winner = fx.home_team if fx.home_score > fx.away_score else fx.away_team
-        loser = fx.away_team if winner == fx.home_team else fx.home_team
+        for side in (fx.home_team, fx.away_team):
+            t = by_name.get(side)
+            if not t:
+                continue
+            try:
+                if STAGE_ORDER.index(rnd) > STAGE_ORDER.index(t.stage):
+                    t.stage = rnd
+            except ValueError:
+                pass
 
-        # Advance the winner's stage to at least the next round.
-        w = by_name.get(winner)
-        if w and not w.eliminated:
-            _advance(w, fx.stage)
-
-        # Knockout loser is eliminated (group results don't eliminate here).
-        if fx.stage != "Group":
-            l = by_name.get(loser)
-            if l:
-                l.stage = fx.stage  # reached this stage
-                l.eliminated = True
+        # Apply finished knockout results: winner advances, loser is out here.
+        if fx.status == "FINISHED" and fx.home_score is not None and fx.away_score is not None:
+            winner = None
+            if fx.home_score > fx.away_score:
+                winner = fx.home_team
+            elif fx.away_score > fx.home_score:
+                winner = fx.away_team
+            else:
+                code = None
+                if fx.detail:
+                    try:
+                        code = (_json.loads(fx.detail) or {}).get("winner")
+                    except Exception:
+                        code = None
+                if code == "HOME_TEAM":
+                    winner = fx.home_team
+                elif code == "AWAY_TEAM":
+                    winner = fx.away_team
+            if winner:
+                loser = fx.away_team if winner == fx.home_team else fx.home_team
+                w, l = by_name.get(winner), by_name.get(loser)
+                if w:
+                    _advance(w, rnd)        # into the next round (or Winner)
+                if l:
+                    l.stage = rnd           # eliminated at the round they lost
+                    l.eliminated = True
     await db.flush()
 
 
 def _advance(team: Team, fixture_stage: str) -> None:
-    """Move team to the round *after* the one it just won."""
+    """Move a team to the round AFTER the knockout round it just won.
+
+    Group matches never change the stage. Winning the Final → 'Winner'.
+    Winning R16 → 'QF', QF → 'SF', SF → 'Final'.
+    """
+    if fixture_stage in ("Group", ""):
+        return
     if fixture_stage == "Final":
         team.stage = "Winner"
         return
