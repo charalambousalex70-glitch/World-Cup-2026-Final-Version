@@ -118,6 +118,9 @@ class LeaderboardRow(BaseModel):
     flag_emoji: str
     stage: str
     points: int
+    wins: int = 0
+    draws: int = 0
+    losses: int = 0
     eliminated: bool
     potential_payout: float
 
