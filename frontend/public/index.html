@@ -766,19 +766,71 @@ function vHome(s){
   </div>`;
 }
 
-/* Recent activity: real notifications from the backend if present, otherwise a
-   friendly placeholder. Populated by loadActivity() / WebSocket events. */
+/* Recent activity: a LIVE feed built from things we already receive in real
+   time — chat messages (incl. the Goal Bot) and leaderboard climbs. Shows the
+   latest two and updates instantly via WebSocket, no extra fetch needed. */
 let LIVE_ACTIVITY=null;
+let ACTIVITY_FEED=[];           // [{icon,title,body,ts,kind}], newest first
+let LAST_RANKS=null;            // {participantName: rank} to detect climbs
+
+function pushActivity(item){
+  ACTIVITY_FEED.unshift(item);
+  if(ACTIVITY_FEED.length>20)ACTIVITY_FEED.length=20;
+}
+/* Record a chat message (including bot) as an activity item. */
+function activityFromComment(c){
+  if(!c)return;
+  const isBot=c.username==='⚽ Goal Bot';
+  pushActivity({
+    icon:isBot?'⚽':'💬',
+    title:isBot?'Goal Bot':`${c.username} posted in chat`,
+    body:(c.body||'').slice(0,80),
+    ts:c.created_at||new Date().toISOString(),
+    kind:'chat',
+  });
+}
+/* Compare a fresh leaderboard to the last one and log anyone who climbed. */
+function activityFromLeaderboard(board){
+  if(!Array.isArray(board))return;
+  const ranks={};
+  board.forEach((r,i)=>{ranks[r.participant_name]=i+1;});
+  if(LAST_RANKS){
+    // Find the biggest climber (smallest rank number now vs before).
+    let best=null;
+    board.forEach((r,i)=>{
+      const now=i+1, was=LAST_RANKS[r.participant_name];
+      if(was&&now<was){ const gain=was-now; if(!best||gain>best.gain)best={name:r.participant_name,now,gain,team:r.team_name,pts:r.points}; }
+    });
+    if(best){
+      pushActivity({
+        icon:'📈',
+        title:`${best.name} climbed to #${best.now}`,
+        body:`${best.team||''} · ${best.pts} pts`,
+        ts:new Date().toISOString(),
+        kind:'climb',
+      });
+    }
+  }
+  LAST_RANKS=ranks;
+}
+
 function activityHTML(){
-  if(LIVE && Array.isArray(LIVE_ACTIVITY)){
-    if(!LIVE_ACTIVITY.length)
-      return '<div class="card mut" style="text-align:center;font-size:13px">No activity yet. Updates appear here when teams play, advance, or get knocked out.</div>';
-    return LIVE_ACTIVITY.slice(0,5).map(n=>`<div class="notif">
+  if(LIVE && ACTIVITY_FEED.length){
+    return ACTIVITY_FEED.slice(0,2).map(n=>`<div class="notif">
+      <div class="ni" style="background:${n.kind==='climb'?'#2fe28a1f;color:#2fe28a':(n.icon==='⚽'?'#ffc83d1f;color:#ffc83d':'#4d8dff1f;color:#4d8dff')}">${n.icon||'⚽'}</div>
+      <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.title||''}</div>
+        <div class="mut" style="font-size:12px">${(n.body||'').replace(/</g,'&lt;')}</div></div>
+      <div class="mut" style="font-size:11px">${timeAgo(n.ts)}</div></div>`).join('');
+  }
+  if(LIVE && Array.isArray(LIVE_ACTIVITY) && LIVE_ACTIVITY.length){
+    return LIVE_ACTIVITY.slice(0,2).map(n=>`<div class="notif">
       <div class="ni" style="background:#4d8dff1f;color:#4d8dff">${n.icon||'⚽'}</div>
       <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.title||''}</div>
         <div class="mut" style="font-size:12px">${n.body||''}</div></div>
       <div class="mut" style="font-size:11px">${timeAgo(n.created_at)}</div></div>`).join('');
   }
+  if(LIVE)
+    return '<div class="card mut" style="text-align:center;font-size:13px">No activity yet. Climbs and chat messages appear here live.</div>';
   // Demo fallback (only when not connected to a live backend).
   return notifs.slice(0,2).map(n=>`<div class="notif"><div class="ni" style="background:${n.c}1f;color:${n.c}">${n.i}</div>
     <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.t}</div><div class="mut" style="font-size:12px">${n.s}</div></div>
@@ -792,10 +844,15 @@ function timeAgo(iso){
   if(diff<86400)return Math.floor(diff/3600)+'h';
   return Math.floor(diff/86400)+'d';
 }
+/* Seed the feed from existing chat history + notifications when opening a league. */
 async function loadActivity(){
   if(!LIVE||!CUR_SWEEP)return;
   try{LIVE_ACTIVITY=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/notifications`)||[];}
-  catch(e){console.warn('activity load failed',e);LIVE_ACTIVITY=[];}
+  catch(e){LIVE_ACTIVITY=[];}
+  // Seed from the last couple of chat messages so the feed isn't empty on load.
+  if(!ACTIVITY_FEED.length && Array.isArray(COMMENTS)){
+    COMMENTS.slice(-3).forEach(activityFromComment);
+  }
 }
 
 /* ---------------- LEADERBOARD ---------------- */
@@ -1775,7 +1832,16 @@ function applyLeaderboard(rows){
 }
 async function refreshLive(){
   if(!LIVE||!SID)return;
-  try{applyLeaderboard(await apiReq(`/sweepstakes/${SID}/leaderboard`));render()}
+  try{
+    const board=await apiReq(`/sweepstakes/${SID}/leaderboard`);
+    // Seed the climb baseline the first time we see a board (no false "climb"
+    // on initial load), then keep it updated on subsequent refreshes.
+    if(Array.isArray(board)&&board.length){
+      if(LAST_RANKS===null){LAST_RANKS={};board.forEach((r,i)=>{LAST_RANKS[r.participant_name]=i+1;});}
+      else{activityFromLeaderboard(board);}
+    }
+    applyLeaderboard(board);render();
+  }
   catch(e){console.warn('refresh failed',e)}
 }
 function startLive(sid){
@@ -1786,7 +1852,7 @@ function startLive(sid){
   const open=()=>{
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
-      if(m.event==='leaderboard_updated'&&m.data.leaderboard){applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{loadActivity().then(()=>render());});}
+      if(m.event==='leaderboard_updated'&&m.data.leaderboard){activityFromLeaderboard(m.data.leaderboard);applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{render();});}
       else if(m.event==='participant_joined'){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
@@ -1799,6 +1865,8 @@ function startLive(sid){
       else if(m.event==='comment_added'){
         if(!Array.isArray(COMMENTS))COMMENTS=[];
         if(m.data&&m.data.id&&!COMMENTS.find(x=>x.id===m.data.id)){COMMENTS.push(m.data);renderChatList();}
+        activityFromComment(m.data);     // surface in Recent Activity instantly
+        if(view==='home')render();
         notifyChat(m.data);
       }
       else if(m.event==='fixtures_updated'){
@@ -1818,7 +1886,7 @@ let MY_LEAGUES=[];        // all sweepstakes the user is in (summary list)
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
   players.length=0; alloc.length=0; stages.length=0; paid.length=0;
-  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null; MY_PREDS=null; PRED_BOARD=null; STANDINGS=null;
+  HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null; MY_PREDS=null; PRED_BOARD=null; STANDINGS=null; ACTIVITY_FEED=[]; LAST_RANKS=null;
 }
 
 /* Populate the local players[] from the sweepstake's REAL participants so the
@@ -1858,6 +1926,7 @@ async function selectLeague(id){
   startLive(s.id);
   await refreshLive();
   await loadFixtures();
+  await loadComments();    // so Recent Activity can seed from recent chat
   await loadActivity();
   loadPredictions(); loadStandings();
   view='home'; render();
@@ -1964,7 +2033,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v18 · progress-104</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v19 · live-activity</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
