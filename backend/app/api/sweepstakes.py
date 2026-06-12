@@ -293,7 +293,10 @@ async def leaderboard(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     sweep = await _load_full(db, sid)
     if not sweep:
         raise HTTPException(404, "Not found")
-    return compute_leaderboard(sweep)
+    fixtures = (
+        await db.execute(select(Fixture).where(Fixture.sweepstake_id == sid))
+    ).scalars().all()
+    return compute_leaderboard(sweep, fixtures)
 
 
 # ---------- Fixtures ----------
@@ -317,13 +320,13 @@ async def sync_now(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         raise HTTPException(404, "Not found")
     _require_admin(sweep, user)
     changed = await football.sync_fixtures(db, sweep)
-    if changed:
-        full = await _load_full(db, sid)
-        await manager.broadcast(str(sid), "leaderboard_updated",
-                                {"leaderboard": [r.model_dump() for r in compute_leaderboard(full)]})
     rows = (
         await db.execute(select(Fixture).where(Fixture.sweepstake_id == sid))
     ).scalars().all()
+    if changed:
+        full = await _load_full(db, sid)
+        await manager.broadcast(str(sid), "leaderboard_updated",
+                                {"leaderboard": [r.model_dump() for r in compute_leaderboard(full, rows)]})
     return rows
 
 
