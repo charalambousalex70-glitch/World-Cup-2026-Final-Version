@@ -186,6 +186,7 @@ const players=[
 let alloc=[0,1,2,3,4,5,6,7,8,9]; // teams index per player
 const stagePts={'Group':10,'R16':25,'QF':45,'SF':70,'Final':90,'Winner':120,'Out':0};
 let stages=['Winner','SF','Final','QF','Out','QF','R16','Out','R16','SF'];
+let PTS=[];  // backend-computed points per player (incl. group-position bonus)
 const paid=[true,true,true,true,false,true,true,true,false,true];
 
 const fixtures=[
@@ -258,7 +259,11 @@ let MY_ID=null;  // logged-in user's id (to detect league admin)
 const T=i=>teams[i]||{n:'TBD',e:'⏳',c:'#888'};  // safe fallback before the draw
 const pool=()=>players.length*sweep.fee;
 function ranked(){
-  return players.map((p,i)=>({p,ti:alloc[i],stage:stages[i],pts:stagePts[stages[i]],idx:i}))
+  // Use the backend's authoritative points (group base 10 + position bonus, or
+  // knockout stage points). Fall back to the flat stage lookup only when no
+  // backend value is present (e.g. demo mode before a live connection).
+  return players.map((p,i)=>({p,ti:alloc[i],stage:stages[i],
+      pts:(PTS[i]!=null?PTS[i]:stagePts[stages[i]]),idx:i}))
     .sort((a,b)=>b.pts-a.pts||a.idx-b.idx);
 }
 function toast(msg,icon='🔔'){
@@ -1820,14 +1825,15 @@ async function apiReq(path,{method='GET',body,auth=true,retries=4}={}){
 function applyLeaderboard(rows){
   // Only the leaderboard (post-draw) carries team/stage data. If it's empty
   // (no draw yet), keep the participant list we already loaded — don't wipe it.
-  if(!rows||!rows.length){alloc.length=0;stages.length=0;return;}
-  players.length=0; alloc.length=0; stages.length=0;
+  if(!rows||!rows.length){alloc.length=0;stages.length=0;PTS.length=0;return;}
+  players.length=0; alloc.length=0; stages.length=0; PTS.length=0;
   rows.forEach((row)=>{
     let ti=teams.findIndex(t=>t.n===row.team_name);
     if(ti<0){teams.push({n:row.team_name,e:row.flag_emoji,c:'#888'});ti=teams.length-1}
     players.push({id:row.participant_id,name:row.participant_name,
       av:row.participant_name.slice(0,2).toUpperCase(),col:row.avatar_color});
     alloc.push(ti); stages.push(row.stage);
+    PTS.push(row.points);   // authoritative points from the backend (incl. group-position bonus)
   });
 }
 async function refreshLive(){
@@ -2033,7 +2039,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v19 · live-activity</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v20 · leaderboard-points-fix</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
