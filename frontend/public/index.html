@@ -546,7 +546,7 @@ function myTeamNames(){ return new Set(teams.map(t=>t.n)); }
 function groupTablesHTML(){
   if(!STANDINGS||typeof STANDINGS!=='object')return '<div class="card mut" style="text-align:center;font-size:13px">Loading…</div>';
   const groups=Object.keys(STANDINGS).sort();
-  if(!groups.length)return '<div class="card mut" style="text-align:center;font-size:13px">Group tables appear once the tournament kicks off (first games 28 Jun).</div>';
+  if(!groups.length)return '<div class="card mut" style="text-align:center;font-size:13px">No standings loaded yet. Tap ↻ Refresh above. If it stays empty, the data feed may not be returning World Cup standings on the current plan.</div>';
   const mine=myTeamNames();
   return groups.map(g=>{
     const rows=(STANDINGS[g]||[]).map((r,i)=>{
@@ -576,7 +576,8 @@ function vTeams(s){
   // After an approved draw, show LIVE GROUP TABLES with points & positions.
   if(drawDone){
     s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
-      <h2 style="font-size:24px">Group Tables</h2>
+      <div class="between"><h2 style="font-size:24px">Group Tables</h2>
+        <button class="btn ghost" style="width:auto;padding:7px 12px;font-size:12px" onclick="refreshStandings()">↻ Refresh</button></div>
       <div class="card" style="padding:13px"><span class="mut" style="font-size:13px">Live group standings. Your drawn teams are highlighted in <span class="gold">gold</span>. Top 2 of each group qualify, plus the 8 best 3rd-placed teams.</span></div>
       <div id="grouptables">${groupTablesHTML()}</div>
     </div>`;
@@ -688,14 +689,17 @@ function vHome(s){
   // Matches played = finished + live fixtures from the backend.
   const matchesPlayed = Array.isArray(LIVE_FIXTURES)
     ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED'||x.status==='LIVE').length : 0;
-  // Tournament progress = furthest stage reached across all alive teams.
+  // Tournament progress = finished games out of the full 104-match schedule.
+  const TOTAL_GAMES=104;
+  const gamesFinished = Array.isArray(LIVE_FIXTURES)
+    ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED').length : 0;
+  const prog = Math.round(gamesFinished/TOTAL_GAMES*100);
+  // Stage tracker (which round we're in) still uses team stages, for the labels.
   const stageOrder=['Group','R16','QF','SF','Final','Winner'];
-  const stagePct={Group:10,R16:30,QF:50,SF:70,Final:90,Winner:100,Out:0};
   let furthest='Group';
   if(drawDone){
     stages.forEach(st=>{ if(st&&st!=='Out'&&stageOrder.indexOf(st)>stageOrder.indexOf(furthest))furthest=st; });
   }
-  const prog = drawDone ? (stagePct[furthest]||0) : 0;
   const stageLabels=['Groups','R16','QF','SF','Final'];
   const curStageLabelIdx=Math.min(stageOrder.indexOf(furthest),4);
 
@@ -741,7 +745,7 @@ function vHome(s){
 
     ${todayDigestHTML()}
     <div class="card">
-      <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700">${prog}%</span></div>
+      <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700">${gamesFinished} / ${TOTAL_GAMES} · ${prog}%</span></div>
       <div class="bar"><i style="width:${prog}%"></i></div>
       <div class="between mut" style="font-size:11px;margin-top:8px">${stageLabels.map((l,i)=>`<span class="${i===curStageLabelIdx&&drawDone?'gold':''}">${l}</span>`).join('')}</div>
     </div>
@@ -842,11 +846,18 @@ function todayDigestHTML(){
 }
 /* ---------------- GROUP STANDINGS ---------------- */
 let STANDINGS=null;
-async function loadStandings(){
+async function loadStandings(force){
   if(!LIVE||!CUR_SWEEP)return;
-  try{STANDINGS=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/standings`)||{};}
+  try{STANDINGS=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/standings${force?'?refresh=1':''}`)||{};}
   catch(e){STANDINGS={};}
 }
+window.refreshStandings=async()=>{
+  toast('Refreshing standings…','↻');
+  await loadStandings(true);
+  const el=$('#grouptables'); if(el)el.innerHTML=groupTablesHTML();
+  const n=STANDINGS&&typeof STANDINGS==='object'?Object.keys(STANDINGS).length:0;
+  toast(n?`Loaded ${n} groups`:'Feed returned no standings yet','✅');
+};
 
 /* ---------------- PREDICTIONS (side game: 5 exact / 2 result) ---------------- */
 let MY_PREDS=null, PRED_BOARD=null;
@@ -1775,7 +1786,7 @@ function startLive(sid){
   const open=()=>{
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
-      if(m.event==='leaderboard_updated'&&m.data.leaderboard){applyLeaderboard(m.data.leaderboard);loadActivity().then(()=>render());render()}
+      if(m.event==='leaderboard_updated'&&m.data.leaderboard){applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{loadActivity().then(()=>render());});}
       else if(m.event==='participant_joined'){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
@@ -1953,7 +1964,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v16 · group-tables-scoring-predhist</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v18 · progress-104</b></div>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
