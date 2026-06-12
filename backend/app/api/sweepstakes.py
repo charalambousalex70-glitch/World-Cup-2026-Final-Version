@@ -642,11 +642,15 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
     if not fx or fx.sweepstake_id != sid:
         raise HTTPException(404, "Match not found")
     now = datetime.now(timezone.utc)
-    if fx.status == "SCHEDULED" and not (fx.kickoff and fx.kickoff <= now):
-        return {"locked": True, "predictions": []}
     rows = (
         await db.execute(select(Prediction).where(Prediction.fixture_id == fid))
     ).scalars().all()
+    # Before kick-off: don't reveal picks (would let people copy), but DO show
+    # how many have predicted so far, and whether YOU have.
+    if fx.status == "SCHEDULED" and not (fx.kickoff and fx.kickoff <= now):
+        mine = next((p for p in rows if p.user_id == user.id), None)
+        return {"locked": True, "count": len(rows), "predictions": [],
+                "you": {"home": mine.home_pred, "away": mine.away_pred} if mine else None}
     users = {u.id: u for u in (
         await db.execute(select(User)).scalars().all()
     )}
@@ -659,8 +663,13 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
             "username": u.username if u else "Player",
             "avatar_color": u.avatar_color if u else "#888",
             "home": pr.home_pred, "away": pr.away_pred, "points": pts,
+            "is_me": pr.user_id == user.id,
         })
-    out.sort(key=lambda r: (-(r["points"] or 0), r["username"].lower()))
+    # Finished: best predictions first. Pre-finish: name order.
+    if finished:
+        out.sort(key=lambda r: (-(r["points"] or 0), r["username"].lower()))
+    else:
+        out.sort(key=lambda r: r["username"].lower())
     return {"locked": False, "finished": finished,
             "score": [fx.home_score, fx.away_score], "predictions": out}
 
