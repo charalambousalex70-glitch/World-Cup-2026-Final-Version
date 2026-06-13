@@ -98,4 +98,7 @@ async def root():
 @app.get("/health", tags=["meta"])
 async def health():
     # 'build' lets you confirm which backend version is actually live on Render.
-    return {"status": "ok", "service": settings.PROJECT_NAME, "build": "v8-maxplayers"}
+    # 'poller' confirms the background refresh job is actually running.
+    from app.services.poller import POLLER_STATS
+    return {"status": "ok", "service": settings.PROJECT_NAME,
+            "build": "v26-realtime", "poller": POLLER_STATS}
