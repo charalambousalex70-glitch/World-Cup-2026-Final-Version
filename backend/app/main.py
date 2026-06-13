@@ -97,8 +97,10 @@ async def root():
 
 @app.get("/health", tags=["meta"])
 async def health():
-    # 'build' lets you confirm which backend version is actually live on Render.
-    # 'poller' confirms the background refresh job is actually running.
+    # 'build' confirms which backend version is live; 'poller' confirms the
+    # background job runs; 'feed' shows the data-source health (e.g. 403 = the
+    # plan isn't authorised for this competition).
     from app.services.poller import POLLER_STATS
+    from app.services.football import FEED_HEALTH
     return {"status": "ok", "service": settings.PROJECT_NAME,
-            "build": "v26-realtime", "poller": POLLER_STATS}
+            "build": "v30-feed-health", "poller": POLLER_STATS, "feed": FEED_HEALTH}
