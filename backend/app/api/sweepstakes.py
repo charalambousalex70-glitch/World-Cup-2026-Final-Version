@@ -675,19 +675,23 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
     finished = fx.status == "FINISHED"
     out = []
     for pr in rows:
-        u = users.get(pr.user_id)
-        pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score) if finished else None
-        out.append({
-            "username": u.username if u else "Player",
-            "avatar_color": u.avatar_color if u else "#888",
-            "home": pr.home_pred, "away": pr.away_pred, "points": pts,
-            "is_me": pr.user_id == user.id,
-        })
+        try:
+            u = users.get(pr.user_id)
+            pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score) if finished else None
+            out.append({
+                "username": (u.username if u else "Player"),
+                "avatar_color": (u.avatar_color if (u and u.avatar_color) else "#888"),
+                "home": pr.home_pred, "away": pr.away_pred, "points": pts,
+                "is_me": pr.user_id == user.id,
+            })
+        except Exception:
+            # Never let a single malformed prediction crash the whole response.
+            continue
     # Finished: best predictions first. Pre-finish: name order.
     if finished:
-        out.sort(key=lambda r: (-(r["points"] or 0), r["username"].lower()))
+        out.sort(key=lambda r: (-(r["points"] or 0), (r["username"] or "").lower()))
     else:
-        out.sort(key=lambda r: r["username"].lower())
+        out.sort(key=lambda r: (r["username"] or "").lower())
     return {"locked": False, "finished": finished,
             "live": fx.status == "LIVE",
             "home_team": fx.home_team, "away_team": fx.away_team,
