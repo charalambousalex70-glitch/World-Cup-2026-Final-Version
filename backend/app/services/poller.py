@@ -21,17 +21,32 @@ from app.websocket.manager import manager
 
 log = logging.getLogger("poller")
 
+# Lightweight runtime stats so a diagnostics endpoint can confirm the poller is
+# actually running on the server (vs. silently stopped or never started).
+POLLER_STATS = {
+    "started": False,
+    "last_run": None,        # ISO timestamp of the last completed cycle
+    "last_changes": 0,       # fixtures changed in the last cycle
+    "cycles": 0,
+    "last_error": None,
+}
+
 
 async def poll_loop() -> None:
     if football.is_offline():
         log.info("Football API offline — poller idle.")
         return
+    POLLER_STATS["started"] = True
     log.info("Football poller started (every %ss).", settings.FOOTBALL_POLL_SECONDS)
     while True:
         try:
             await _poll_once()
-        except Exception:  # never let the loop die
+        except Exception as e:  # never let the loop die
+            POLLER_STATS["last_error"] = str(e)
             log.exception("Poll cycle failed")
+        from datetime import datetime, timezone
+        POLLER_STATS["last_run"] = datetime.now(timezone.utc).isoformat()
+        POLLER_STATS["cycles"] += 1
         await asyncio.sleep(settings.FOOTBALL_POLL_SECONDS)
 
 
