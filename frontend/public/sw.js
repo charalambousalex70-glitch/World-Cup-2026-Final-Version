@@ -3,9 +3,15 @@
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
  */
-const CACHE = "sweepstake-v36";
+const CACHE = "sweepstake-v38";
 
 self.addEventListener("install", () => self.skipWaiting());
+
+// Allow the page to tell a waiting SW to activate immediately (used when a new
+// version is detected while the app is open).
+self.addEventListener("message", (e) => {
+  if (e.data === "skipWaiting") self.skipWaiting();
+});
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
