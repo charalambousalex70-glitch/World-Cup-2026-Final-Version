@@ -1,125 +1,202 @@
-"""Team draw engine.
+"""Background task that polls the football API and pushes live updates.
 
-Guarantees:
-- one team per participant
-- no duplicate team assignments
-- cryptographically-seeded shuffle for fairness
-- idempotency: refuses to run if the draw is already approved
+Runs as an asyncio task started on app startup. For every active sweepstake it
+syncs fixtures; when anything changes it recomputes the leaderboard, writes
+notifications, and broadcasts over WebSockets.
 
-Team selection: the draw uses the TOP-N teams from the ranked contender list
-(app.services.teams_data.RANKED_TEAMS), where N = number of participants. So
-with 10 players, the 10 most-likely-to-win teams are drawn — everyone gets a
-genuine contender. The team set is (re)generated at draw time so it always
-matches the final participant count.
+In offline mode (no API key) it idles — the demo/seed data is static.
 """
-import secrets
+import asyncio
+import logging
 
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.models import Allocation, Participant, Sweepstake, Team
-from app.services.teams_data import RANKED_TEAMS
+from app.core.config import settings
+from app.core.database import AsyncSessionLocal
+from app.models import Allocation, Fixture, Notification, Participant, Sweepstake
+from app.services import football
+from app.services.scoring import compute_leaderboard
+from app.websocket.manager import manager
 
+log = logging.getLogger("poller")
 
-class DrawError(Exception):
-    pass
-
-
-async def run_draw(db: AsyncSession, sweepstake: Sweepstake, excluded: list[str] | None = None) -> list[Allocation]:
-    """Randomly allocate the top-N ranked teams to the N participants.
-
-    `excluded` is an optional list of team names to skip; the next-ranked teams
-    take their place so there are still exactly N teams.
-
-    Clears any *unapproved* prior draw and regenerates it. Once a draw is
-    approved it is immutable and this raises DrawError.
-    """
-    if sweepstake.draw_approved:
-        raise DrawError("Draw already approved and finalized.")
-
-    participants = (
-        await db.execute(
-            select(Participant).where(Participant.sweepstake_id == sweepstake.id)
-        )
-    ).scalars().all()
-    n = len(participants)
-
-    if n == 0:
-        raise DrawError("No participants to draw for.")
-
-    # Build the candidate pool, skipping excluded teams, then take the top N.
-    excluded_set = {e.strip().lower() for e in (excluded or [])}
-    candidates = [(name, flag) for name, flag in RANKED_TEAMS if name.lower() not in excluded_set]
-    if n > len(candidates):
-        raise DrawError(
-            f"Too many participants ({n}) for the available teams ({len(candidates)}). "
-            f"Exclude fewer teams or reduce participants."
-        )
-    top_teams = candidates[:n]
-
-    # Clear previous unapproved allocations AND the old team set, then create
-    # exactly the chosen top-N teams for this draw.
-    await db.execute(delete(Allocation).where(Allocation.sweepstake_id == sweepstake.id))
-    await db.execute(delete(Team).where(Team.sweepstake_id == sweepstake.id))
-    await db.flush()
-
-    teams = [
-        Team(sweepstake_id=sweepstake.id, name=name, flag_emoji=flag, stage="Group")
-        for name, flag in top_teams
-    ]
-    for t in teams:
-        db.add(t)
-    await db.flush()
-
-    # Secure shuffle so the ranking doesn't bias who gets which team.
-    pool = list(teams)
-    _secure_shuffle(pool)
-
-    allocations: list[Allocation] = []
-    for participant, team in zip(participants, pool):
-        alloc = Allocation(
-            sweepstake_id=sweepstake.id,
-            participant_id=participant.id,
-            team_id=team.id,
-        )
-        db.add(alloc)
-        allocations.append(alloc)
-
-    sweepstake.status = "drawn"
-    await db.flush()
-    return allocations
+# Lightweight runtime stats so a diagnostics endpoint can confirm the poller is
+# actually running on the server (vs. silently stopped or never started).
+POLLER_STATS = {
+    "started": False,
+    "last_run": None,        # ISO timestamp of the last completed cycle
+    "last_changes": 0,       # fixtures changed in the last cycle
+    "cycles": 0,
+    "last_error": None,
+}
 
 
-async def approve_draw(db: AsyncSession, sweepstake: Sweepstake) -> None:
-    """Lock the draw permanently."""
-    existing = (
-        await db.execute(
-            select(Allocation).where(Allocation.sweepstake_id == sweepstake.id)
-        )
-    ).scalars().all()
-    if not existing:
-        raise DrawError("Nothing to approve — run the draw first.")
-    sweepstake.draw_approved = True
-    sweepstake.status = "active"
-    await db.flush()
+async def poll_loop() -> None:
+    if football.is_offline():
+        log.info("Football API offline — poller idle.")
+        return
+    POLLER_STATS["started"] = True
+    log.info("Football poller started (every %ss).", settings.FOOTBALL_POLL_SECONDS)
+    while True:
+        try:
+            await _poll_once()
+        except Exception as e:  # never let the loop die
+            POLLER_STATS["last_error"] = str(e)
+            log.exception("Poll cycle failed")
+        from datetime import datetime, timezone
+        POLLER_STATS["last_run"] = datetime.now(timezone.utc).isoformat()
+        POLLER_STATS["cycles"] += 1
+        await asyncio.sleep(settings.FOOTBALL_POLL_SECONDS)
 
 
-async def reset_draw(db: AsyncSession, sweepstake: Sweepstake) -> None:
-    """Undo a draw so the admin can re-run it (e.g. after more people join).
+async def _poll_once() -> None:
+    async with AsyncSessionLocal() as db:
+        active = (
+            await db.execute(
+                select(Sweepstake).where(
+                    Sweepstake.competition_code.isnot(None),
+                    Sweepstake.status.in_(["open", "drawn", "active"]),
+                )
+            )
+        ).scalars().all()
 
-    Clears allocations and the generated team set, un-approves the draw, and
-    returns the sweepstake to the 'open' state so new members can still join
-    and a fresh draw reflects everyone.
-    """
-    await db.execute(delete(Allocation).where(Allocation.sweepstake_id == sweepstake.id))
-    await db.execute(delete(Team).where(Team.sweepstake_id == sweepstake.id))
-    sweepstake.draw_approved = False
-    sweepstake.status = "open"
-    await db.flush()
+        # Fetch each competition's feed ONCE, then apply to every league on it.
+        # This means all leagues update from the same snapshot simultaneously
+        # (no per-league lag) and we make far fewer API calls.
+        import json as _json
+        codes = {s.competition_code for s in active if s.competition_code}
+        matches_by_code: dict = {}
+        standings_by_code: dict = {}
+        for code in codes:
+            matches_by_code[code] = await football.fetch_matches(code)
+            standings_by_code[code] = await football.fetch_standings(code)
 
+        for sweep in active:
+            sweep_id = sweep.id  # capture before any further loads
+            try:
+                shared_matches = matches_by_code.get(sweep.competition_code)
+                changes = await football.sync_fixtures(db, sweep, matches=shared_matches)
 
-def _secure_shuffle(items: list) -> None:
-    """In-place Fisher–Yates using a CSPRNG."""
-    for i in range(len(items) - 1, 0, -1):
-        j = secrets.randbelow(i + 1)
-        items[i], items[j] = items[j], items[i]
+                # Apply the shared standings snapshot (already fetched once).
+                standings = standings_by_code.get(sweep.competition_code)
+                if standings:
+                    sweep.standings = _json.dumps(standings)
+                    await db.flush()
+
+                if not changes:
+                    continue
+
+                # Capture changed fixtures + their PREVIOUS state into plain dicts
+                # now (avoids async lazy-load issues, and lets us announce only
+                # genuine transitions rather than re-posting every poll).
+                changed_data = []
+                for ch in changes:
+                    fx = ch["fx"]
+                    try:
+                        goals_now = (_json.loads(fx.detail) or {}).get("goals", []) if fx.detail else []
+                    except Exception:
+                        goals_now = []
+                    changed_data.append({
+                        "home": fx.home_team, "away": fx.away_team,
+                        "hs": fx.home_score, "as_": fx.away_score,
+                        "status": fx.status, "stage": fx.stage,
+                        "prev_status": ch["prev_status"], "prev_goals": ch["prev_goals"],
+                        "goals": goals_now,
+                    })
+
+                full = (
+                    await db.execute(
+                        select(Sweepstake)
+                        .where(Sweepstake.id == sweep_id)
+                        .options(
+                            selectinload(Sweepstake.participants).selectinload(Participant.user),
+                            selectinload(Sweepstake.participants)
+                            .selectinload(Participant.allocation)
+                            .selectinload(Allocation.team),
+                            selectinload(Sweepstake.prize_tiers),
+                        )
+                    )
+                ).scalar_one()
+
+                parts = [
+                    (p.user_id, p.allocation.team.name if (p.allocation and p.allocation.team) else None)
+                    for p in full.participants
+                ]
+
+                fixtures = (
+                    await db.execute(select(Fixture).where(Fixture.sweepstake_id == sweep_id))
+                ).scalars().all()
+                board = compute_leaderboard(full, fixtures)
+                await manager.broadcast(
+                    str(sweep_id), "leaderboard_updated",
+                    {"leaderboard": [r.model_dump() for r in board]},
+                )
+
+                # ---- Goal Bot: ONLY kick-off, each new goal, red cards, full-time.
+                # Deduped by comparing against the previous state of each fixture.
+                from app.models import Comment
+
+                def _emit(msg):
+                    bot = Comment(sweepstake_id=sweep_id, user_id=None, body=msg[:500])
+                    db.add(bot)
+                    return bot
+
+                bot_msgs = []
+                for fxd in changed_data:
+                    home, away = fxd["home"], fxd["away"]
+                    hs, as_ = fxd.get("hs") or 0, fxd.get("as_") or 0
+                    prev, cur = fxd["prev_status"], fxd["status"]
+
+                    # Kick-off: SCHEDULED -> LIVE
+                    if cur == "LIVE" and prev in (None, "SCHEDULED"):
+                        bot_msgs.append(f"🟢 Kick-off! {home} vs {away}")
+
+                    # New goals: announce each goal added since last poll, with scorer.
+                    if cur in ("LIVE", "FINISHED"):
+                        new_goals = fxd["goals"][fxd["prev_goals"]:] if fxd["goals"] else []
+                        for g in new_goals:
+                            who = g.get("scorer") or "Goal"
+                            mins = f"{g['minute']}'" if g.get("minute") is not None else ""
+                            tm = g.get("team") or ""
+                            bot_msgs.append(f"⚽ GOAL {mins} {who} ({tm}) — {home} {hs}–{as_} {away}".replace("  ", " "))
+                        # Red cards (only if the feed provides them; usually absent on free tier)
+                        for rc in (fxd.get("reds") or []):
+                            bot_msgs.append(f"🟥 Red card: {rc}")
+
+                    # Full-time: -> FINISHED (announce once)
+                    if cur == "FINISHED" and prev != "FINISHED":
+                        bot_msgs.append(f"🏁 Full time: {home} {hs}–{as_} {away}")
+
+                for msg in bot_msgs:
+                    bot = _emit(msg)
+                    await db.flush()
+                    await manager.broadcast(str(sweep_id), "comment_added", {
+                        "id": str(bot.id), "body": bot.body,
+                        "created_at": bot.created_at.isoformat() if bot.created_at else None,
+                        "username": "⚽ Goal Bot", "avatar_color": "#ffc83d", "reactions": {},
+                    })
+
+                # Build per-user notifications only on full-time results.
+                for fxd in changed_data:
+                    if fxd["status"] != "FINISHED" or fxd["prev_status"] == "FINISHED":
+                        continue
+                    for user_id, tname in parts:
+                        if not tname or tname not in (fxd["home"], fxd["away"]):
+                            continue
+                        won = (
+                            (tname == fxd["home"] and (fxd["hs"] or 0) > (fxd["as_"] or 0))
+                            or (tname == fxd["away"] and (fxd["as_"] or 0) > (fxd["hs"] or 0))
+                        )
+                        db.add(Notification(
+                            user_id=user_id, sweepstake_id=sweep_id,
+                            icon="⚽" if won else "❌",
+                            title=f"{tname} {'won' if won else 'lost'} {fxd['hs']}–{fxd['as_']}",
+                            body=f"{fxd['home']} vs {fxd['away']} · {fxd['stage']}",
+                        ))
+                await db.commit()
+                await manager.broadcast(str(sweep_id), "fixtures_updated", {"count": len(changed_data)})
+            except Exception:
+                # One bad sweepstake must not kill the whole poll cycle.
+                log.exception("Failed to process sweepstake %s", sweep_id)
+                await db.rollback()
