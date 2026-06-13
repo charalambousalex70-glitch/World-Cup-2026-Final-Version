@@ -656,9 +656,16 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
     rows = (
         await db.execute(select(Prediction).where(Prediction.fixture_id == fid))
     ).scalars().all()
+    # Reveal once the match is live/finished OR kick-off time has passed (a
+    # time-based fallback so predictions still reveal even if the feed is slow
+    # to flip the status). Guard against tz-naive kickoff values from the DB.
+    ko = fx.kickoff
+    if ko is not None and ko.tzinfo is None:
+        ko = ko.replace(tzinfo=timezone.utc)
+    started = (fx.status != "SCHEDULED") or (ko is not None and ko <= now)
     # Before kick-off: don't reveal picks (would let people copy), but DO show
     # how many have predicted so far, and whether YOU have.
-    if fx.status == "SCHEDULED" and not (fx.kickoff and fx.kickoff <= now):
+    if not started:
         mine = next((p for p in rows if p.user_id == user.id), None)
         return {"locked": True, "count": len(rows), "predictions": [],
                 "you": {"home": mine.home_pred, "away": mine.away_pred} if mine else None}
@@ -682,6 +689,8 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
     else:
         out.sort(key=lambda r: r["username"].lower())
     return {"locked": False, "finished": finished,
+            "live": fx.status == "LIVE",
+            "home_team": fx.home_team, "away_team": fx.away_team,
             "score": [fx.home_score, fx.away_score], "predictions": out}
 
 

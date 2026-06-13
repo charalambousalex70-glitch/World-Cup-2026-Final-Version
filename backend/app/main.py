@@ -104,5 +104,5 @@ async def health():
     from app.services.football import FEED_HEALTH
     _k = settings.FOOTBALL_API_KEY or ""
     return {"status": "ok", "service": settings.PROJECT_NAME,
-            "build": "v32-keycheck", "poller": POLLER_STATS, "feed": FEED_HEALTH,
+            "build": "v33-prediction-reveal", "poller": POLLER_STATS, "feed": FEED_HEALTH,
             "api_key_fingerprint": (f"{_k[:4]}…{_k[-4:]} (len {len(_k)})" if _k else "MISSING")}
