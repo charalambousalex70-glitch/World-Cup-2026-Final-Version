@@ -103,4 +103,4 @@ async def health():
     from app.services.poller import POLLER_STATS
     from app.services.football import FEED_HEALTH
     return {"status": "ok", "service": settings.PROJECT_NAME,
-            "build": "v30-feed-health", "poller": POLLER_STATS, "feed": FEED_HEALTH}
+            "build": "v31-rate-limited", "poller": POLLER_STATS, "feed": FEED_HEALTH}

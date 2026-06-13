@@ -21,6 +21,33 @@ from app.models import Fixture, Sweepstake, Team
 
 log = logging.getLogger("football")
 
+# --- Self-imposed rate limit -------------------------------------------------
+# football-data.org's free/livescores tier allows 10 requests/minute. We cap
+# ourselves at 8/min across ALL call sites (poller, on-demand refresh, debug)
+# so a burst can never trip an auto-suspension again.
+import asyncio as _asyncio
+import time as _time
+
+_CALL_TIMES: list[float] = []
+_RATE_MAX = 8
+_RATE_WINDOW = 60.0
+_rate_lock = _asyncio.Lock()
+
+
+async def _rate_gate():
+    """Block just long enough to stay under _RATE_MAX calls per _RATE_WINDOW."""
+    async with _rate_lock:
+        now = _time.monotonic()
+        # Drop timestamps older than the window.
+        cutoff = now - _RATE_WINDOW
+        while _CALL_TIMES and _CALL_TIMES[0] < cutoff:
+            _CALL_TIMES.pop(0)
+        if len(_CALL_TIMES) >= _RATE_MAX:
+            wait = _RATE_WINDOW - (now - _CALL_TIMES[0]) + 0.05
+            if wait > 0:
+                await _asyncio.sleep(wait)
+        _CALL_TIMES.append(_time.monotonic())
+
 # Map football-data.org stage labels to our compact stage codes.
 STAGE_MAP = {
     "GROUP_STAGE": "Group",
@@ -92,6 +119,7 @@ async def fetch_teams(competition_code: str) -> list[dict]:
         return []
     url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/teams"
     try:
+        await _rate_gate()
         async with httpx.AsyncClient(timeout=8) as client:
             r = await client.get(url, headers=_headers())
             r.raise_for_status()
@@ -120,6 +148,7 @@ async def fetch_standings(competition_code: str) -> dict:
         return {}
     url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/standings"
     try:
+        await _rate_gate()
         async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(url, headers=_headers())
             r.raise_for_status()
@@ -187,6 +216,7 @@ async def fetch_matches(competition_code: str) -> list:
         return []
     url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/matches"
     try:
+        await _rate_gate()
         async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(url, headers=_headers())
             if r.status_code != 200:
