@@ -1866,15 +1866,70 @@ async function refreshLive(){
   }
   catch(e){console.warn('refresh failed',e)}
 }
+/* Live-system diagnostics, surfaced in the 🔧 panel. */
+let WS_STATUS='offline';      // 'connected' | 'reconnecting' | 'offline'
+let LAST_EVENT_AT=null;       // timestamp of last WS event received
+let LAST_REFRESH_AT=null;     // timestamp of last successful data refresh
+let POLL_TIER='upcoming';     // 'live' | 'upcoming' | 'finished'
+let pollTimer=null;
+
+/* Choose refresh cadence from what's happening right now:
+   any live match → 8s; matches scheduled today → 60s; otherwise 5min. */
+function pollIntervalMs(){
+  if(!Array.isArray(LIVE_FIXTURES))return 60000;
+  const anyLive=LIVE_FIXTURES.some(x=>x.status==='LIVE');
+  if(anyLive){POLL_TIER='live';return 8000;}
+  const soon=LIVE_FIXTURES.some(x=>x.status==='SCHEDULED'&&x.kickoff&&
+    (new Date(x.kickoff)-Date.now())<6*3600*1000);  // kicks off within 6h
+  if(soon){POLL_TIER='upcoming';return 60000;}
+  POLL_TIER='finished';return 300000;
+}
+/* Timer-based refresh that does NOT depend on the WebSocket, so data stays
+   fresh even if the socket drops (mobile lock, server sleep, flaky network). */
+function scheduleNextPoll(){
+  if(pollTimer)clearTimeout(pollTimer);
+  if(!LIVE||!SID)return;
+  pollTimer=setTimeout(async()=>{
+    try{
+      await refreshLive();          // leaderboard (also seeds climbs)
+      await loadFixtures();         // fixture statuses → moves finished out of Upcoming
+      LAST_REFRESH_AT=new Date().toISOString();
+      render();
+    }catch(e){/* keep polling regardless */}
+    scheduleNextPoll();             // reschedule with a (possibly new) cadence
+  }, pollIntervalMs());
+}
+
+window.manualRefresh=async()=>{
+  if(!LIVE||!SID){toast('Not connected to a league','🔧');return;}
+  toast('Refreshing…','↻');
+  try{await refreshLive();await loadFixtures();await loadActivity();LAST_REFRESH_AT=new Date().toISOString();render();
+    toast('Up to date ✅','✅');}
+  catch(e){toast('Refresh failed','⚠️');}
+};
+/* When the user returns to the app (unlocks phone, refocuses tab), the WS may
+   have dropped while backgrounded — refresh immediately so nothing is stale. */
+let _visBound=false;
+function bindVisibilityRefresh(){
+  if(_visBound)return; _visBound=true;
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden && LIVE && SID){ refreshLive(); loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();render();}); scheduleNextPoll(); }
+  });
+  window.addEventListener('focus',()=>{ if(LIVE&&SID){loadFixtures().then(()=>render());} });
+}
+
 function startLive(sid){
   SID=sid; if(wsClose)wsClose();
+  WS_STATUS='reconnecting';
+  bindVisibilityRefresh();
   const base=window.__API_URL__?window.__API_URL__.replace(/^http/,'ws')
     :`${location.protocol==='https:'?'wss':'ws'}://${location.host}`;
   let alive=true,ws;
   const open=()=>{
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
-      if(m.event==='leaderboard_updated'&&m.data.leaderboard){activityFromLeaderboard(m.data.leaderboard);applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{render();});}
+      LAST_EVENT_AT=new Date().toISOString();
+      if(m.event==='leaderboard_updated'&&m.data.leaderboard){activityFromLeaderboard(m.data.leaderboard);applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();render();});}
       else if(m.event==='participant_joined'){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
@@ -1892,13 +1947,15 @@ function startLive(sid){
         notifyChat(m.data);
       }
       else if(m.event==='fixtures_updated'){
-        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>render());PRED_BOARD=null;});
+        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>{LAST_REFRESH_AT=new Date().toISOString();render();});PRED_BOARD=null;});
       }
     }catch{}};
-    ws.onclose=()=>{if(alive)setTimeout(open,1500)};
-    ws.onopen=()=>{setInterval(()=>{if(ws.readyState===1)ws.send('ping')},25000)};
+    ws.onclose=()=>{WS_STATUS='reconnecting';if(alive)setTimeout(open,1500)};
+    ws.onopen=()=>{WS_STATUS='connected';setInterval(()=>{if(ws.readyState===1)ws.send('ping')},25000)};
   };
-  open(); wsClose=()=>{alive=false;if(ws)ws.close()};
+  open();
+  scheduleNextPoll();   // start the timer-based fallback in parallel with the WS
+  wsClose=()=>{alive=false;WS_STATUS='offline';if(ws)ws.close();if(pollTimer)clearTimeout(pollTimer);};
 }
 let HAS_SWEEPSTAKE=false; // true once a league is selected/open
 let MY_NAME=null;         // the logged-in user's username (to mark "you")
@@ -2060,7 +2117,15 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v25 · shared-predictions-faster</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v26 · realtime-resilient</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px;line-height:1.7">
+        <div class="between"><span>Connection</span><b style="color:${WS_STATUS==='connected'?'var(--grn)':WS_STATUS==='reconnecting'?'var(--gold)':'var(--red)'}">${WS_STATUS==='connected'?'● Connected':WS_STATUS==='reconnecting'?'◌ Reconnecting':'○ Offline'}</b></div>
+        <div class="between"><span>Refresh mode</span><b>${POLL_TIER==='live'?'Live · 8s':POLL_TIER==='upcoming'?'Upcoming · 60s':'Idle · 5m'}</b></div>
+        <div class="between"><span>Last data refresh</span><b>${LAST_REFRESH_AT?timeAgo(LAST_REFRESH_AT):'—'}</b></div>
+        <div class="between"><span>Last live event</span><b>${LAST_EVENT_AT?timeAgo(LAST_EVENT_AT):'—'}</b></div>
+        <div class="between"><span>Fixtures loaded</span><b>${Array.isArray(LIVE_FIXTURES)?LIVE_FIXTURES.length:0}</b></div>
+      </div>
+      <button class="btn ghost" style="margin-top:10px;padding:8px" onclick="manualRefresh()">↻ Force refresh now</button>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
