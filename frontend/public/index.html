@@ -304,6 +304,53 @@ function render(){
   if(showTabs) bindTabs();
 }
 
+/* ---------------- LIVE, IN-PLACE UPDATES ----------------
+   Background data (poll/WebSocket) must NOT call render() — that rebuilds the
+   whole screen and loses scroll position, closes nothing visually but flickers,
+   and feels unstable. Instead liveUpdate() patches ONLY the data elements of
+   whatever view is currently showing, leaving the DOM, scroll, modals, and any
+   form inputs untouched. User navigation still uses render() (they expect the
+   view to change). */
+let UPDATED_COUNT=0;  // diagnostics: how many elements patched last cycle
+function liveUpdate(){
+  if(!auth)return;
+  UPDATED_COUNT=0;
+  // Top bar player count (present on most in-league views)
+  const chip=document.getElementById('hdr-players');
+  if(chip&&CUR_SWEEP){const n=players.length,m=CUR_SWEEP.max_participants;
+    chip.textContent=`👥 ${n}${m?' / '+m:''} players`;UPDATED_COUNT++;}
+
+  // Per-view targeted patches — only touch the view that's actually open.
+  if(view==='board'){
+    const lb=document.getElementById('lb-list');
+    if(lb){const r=ranked();lb.innerHTML=r.map((x,i)=>lbRow(x,i,r)).join('');UPDATED_COUNT++;}
+    const pb=document.getElementById('predboard');
+    if(pb&&window.BOARD_MODE==='pred'){pb.innerHTML=predBoardHTML();UPDATED_COUNT++;}
+    renderChatList();  // already patches #chatlist in place
+  }
+  else if(view==='home'){
+    const tp=document.getElementById('home-progress');
+    if(tp){const gf=Array.isArray(LIVE_FIXTURES)?LIVE_FIXTURES.filter(x=>x.status==='FINISHED').length:0;
+      const pr=Math.round(gf/104*100);tp.innerHTML=`${gf} / 104 · ${pr}%`;
+      const bar=document.getElementById('home-progress-bar');if(bar)bar.style.width=pr+'%';UPDATED_COUNT++;}
+    const act=document.getElementById('home-activity');
+    if(act){act.innerHTML=activityHTML();UPDATED_COUNT++;}
+    const ta=document.getElementById('home-alive');
+    if(ta){ta.textContent=Array.isArray(stages)?stages.filter(s=>s&&s!=='Out').length:players.length;UPDATED_COUNT++;}
+  }
+  else if(view==='fixtures'){
+    const fl=document.getElementById('fxlist');
+    if(fl&&window.__FX_FILTER__){fl.innerHTML=fxList(window.__FX_FILTER__);UPDATED_COUNT++;}
+  }
+  else if(view==='teams'){
+    const gt=document.getElementById('grouptables');
+    if(gt){gt.innerHTML=groupTablesHTML();UPDATED_COUNT++;}
+  }
+  // If a match-detail modal is open, refresh its live bits in place too.
+  if(window.__OPEN_MATCH__){refreshOpenMatch();}
+  LAST_REFRESH_AT=new Date().toISOString();
+}
+
 /* Remember where the user was before opening the profile, so the back button
    returns them there instead of forcing a re-navigation. */
 let PREV_VIEW='home';
@@ -734,7 +781,7 @@ function vHome(s){
     <div class="between"><div>
       <h2 style="font-size:26px;line-height:1">${sweep.tour||'World Cup 2026'}</h2>
       <div class="mut" style="font-size:13px;margin-top:3px">${sweep.name}</div></div>
-      <div class="chip">👥 ${players.length}${(CUR_SWEEP&&CUR_SWEEP.max_participants)?' / '+CUR_SWEEP.max_participants:''} players</div></div>
+      <div class="chip" id="hdr-players">👥 ${players.length}${(CUR_SWEEP&&CUR_SWEEP.max_participants)?' / '+CUR_SWEEP.max_participants:''} players</div></div>
 
     <div class="hero">
       <div class="label" style="color:#cdd6ee">Total Prize Pool</div>
@@ -750,13 +797,13 @@ function vHome(s){
 
     ${todayDigestHTML()}
     <div class="card">
-      <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700">${gamesFinished} / ${TOTAL_GAMES} · ${prog}%</span></div>
-      <div class="bar"><i style="width:${prog}%"></i></div>
+      <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700" id="home-progress">${gamesFinished} / ${TOTAL_GAMES} · ${prog}%</span></div>
+      <div class="bar"><i id="home-progress-bar" style="width:${prog}%"></i></div>
       <div class="between mut" style="font-size:11px;margin-top:8px">${stageLabels.map((l,i)=>`<span class="${i===curStageLabelIdx&&drawDone?'gold':''}">${l}</span>`).join('')}</div>
     </div>
 
     <div class="grid2">
-      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--grn)">${teamsAlive}${(drawDone&&totalTeams)?`<span class="mut" style="font-size:15px">/${totalTeams}</span>`:''}</div><div class="label" style="margin-top:2px">${drawDone?'Teams Still In':'Teams Alive'}</div></div>
+      <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--grn)" id="home-alive-wrap"><span id="home-alive">${teamsAlive}</span>${(drawDone&&totalTeams)?`<span class="mut" style="font-size:15px">/${totalTeams}</span>`:''}</div><div class="label" style="margin-top:2px">${drawDone?'Teams Still In':'Teams Alive'}</div></div>
       <div class="card" style="text-align:center"><div class="mono" style="font-size:30px;font-weight:700;color:var(--blu)">${matchesPlayed}</div><div class="label" style="margin-top:2px">Matches Played</div></div>
     </div>
 
@@ -765,7 +812,7 @@ function vHome(s){
       :'<div class="card mut" style="text-align:center;font-size:13px">No standings yet — run the draw to assign teams.</div>'}
 
     <div class="between" style="margin-top:4px"><div class="label">Recent Activity</div></div>
-    ${activityHTML()}
+    <div id="home-activity">${activityHTML()}</div>
 
     <button class="btn gold" onclick="openInvite()">＋ Invite Friends</button>
   </div>`;
@@ -1060,7 +1107,7 @@ function vBoard(s){
     <h2 style="font-size:24px">Leaderboard</h2>
     <div class="seg"><button class="on" onclick="window.BOARD_MODE='main';render()">Main</button><button onclick="window.BOARD_MODE='pred';render()">🔮 Predictions</button></div>
     <div class="card" style="padding:13px"><div class="between"><span class="mut" style="font-size:13px">${drawn?'Live ranking · updates as results come in':`${players.length} joined · teams assigned at the draw`}</span><span class="live"><span class="dot"></span>${drawn?'LIVE':players.length+' IN'}</span></div></div>
-    <div class="stagger">${r.map((x,i)=>lbRow(x,i,r)).join('')}</div>
+    <div class="stagger" id="lb-list">${r.map((x,i)=>lbRow(x,i,r)).join('')}</div>
     <div class="card" style="font-size:12px">
       <div class="label" style="margin-bottom:8px">Scoring — by match result</div>
       <div class="between"><span class="gold">Win</span><span class="mono gold">+3 pts</span></div>
@@ -1282,10 +1329,14 @@ function vFixtures(s){
     <div class="seg" id="fxseg">
       <button class="on" data-f="upcoming">Upcoming</button><button data-f="live">Live</button><button data-f="done">Results</button><button data-f="all">All</button>
     </div>
-    <div id="fxlist" class="stagger" style="display:flex;flex-direction:column;gap:9px">${fxList('upcoming')}</div>
+    <div id="fxlist" class="stagger" style="display:flex;flex-direction:column;gap:9px">${fxList(window.__FX_FILTER__||'upcoming')}</div>
   </div>`;
+  if(!window.__FX_FILTER__)window.__FX_FILTER__='upcoming';
+  // restore the active segment highlight to the remembered filter
+  document.querySelectorAll('#fxseg button').forEach(x=>{x.classList.toggle('on',x.dataset.f===window.__FX_FILTER__);});
   document.querySelectorAll('#fxseg button').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('#fxseg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+    window.__FX_FILTER__=b.dataset.f;
     $('#fxlist').innerHTML=fxList(b.dataset.f);
   });
   // Fetch real fixtures in the background and re-render when they arrive.
@@ -1297,6 +1348,7 @@ function vFixtures(s){
 window.openMatch=(fid)=>{
   const x=(LIVE_FIXTURES||[]).find(f=>String(f.id)===String(fid));
   if(!x){toast('Match details appear once live data loads','ℹ️');return;}
+  window.__OPEN_MATCH__=fid;   // so liveUpdate() can patch this modal in place
   let det={goals:[],ht:[null,null]};
   try{ if(x.detail) det=Object.assign(det,JSON.parse(x.detail)); }catch{}
   const status = x.status==='LIVE'?'<span class="gold">● LIVE</span>'
@@ -1308,13 +1360,13 @@ window.openMatch=(fid)=>{
       <span class="mono mut">${g.minute!=null?g.minute+"'":''} · ${g.team||''}</span></div>`).join('')
     : `<div class="mut" style="font-size:12px">${x.status==='SCHEDULED'?'Goals appear here once the match kicks off.':'No goal data from the feed for this match.'}</div>`;
   modal(`<div style="text-align:center;margin-bottom:14px">
-      <div class="mut" style="font-size:11px;margin-bottom:8px">${x.stage||''} · ${status}</div>
+      <div class="mut" style="font-size:11px;margin-bottom:8px" id="mm-status">${x.stage||''} · ${status}</div>
       <div class="row" style="justify-content:center;gap:14px;align-items:center">
         <div style="text-align:center;width:90px">${flagImg(x.home_team,30)}<div style="font-weight:700;font-size:13px;margin-top:4px">${x.home_team}</div></div>
-        <div class="mono" style="font-size:30px;font-weight:800">${score}</div>
+        <div class="mono" style="font-size:30px;font-weight:800" id="mm-score">${score}</div>
         <div style="text-align:center;width:90px">${flagImg(x.away_team,30)}<div style="font-weight:700;font-size:13px;margin-top:4px">${x.away_team}</div></div>
       </div>
-      ${(det.ht&&det.ht[0]!=null)?`<div class="mut" style="font-size:11px;margin-top:6px">HT ${det.ht[0]} – ${det.ht[1]}</div>`:''}
+      <div id="mm-ht">${(det.ht&&det.ht[0]!=null)?`<div class="mut" style="font-size:11px;margin-top:6px">HT ${det.ht[0]} – ${det.ht[1]}</div>`:''}</div>
     </div>
     <div class="card" style="margin-bottom:10px">
       <div class="between" style="font-size:13px;margin-bottom:8px"><span class="mut">📅 Kick-off</span><b>${x.kickoff?new Date(x.kickoff).toLocaleString([],{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'TBC'}</b></div>
@@ -1323,7 +1375,7 @@ window.openMatch=(fid)=>{
     </div>
     <div class="card" style="margin-bottom:10px">
       <div class="label" style="margin-bottom:8px">Goals</div>
-      ${goalsRows}
+      <div id="mm-goals">${goalsRows}</div>
     </div>
     ${(x.status==='SCHEDULED' && !(x.kickoff && new Date(x.kickoff)<=new Date()))?`<div class="card" style="margin-bottom:10px">
       <div class="label" style="margin-bottom:8px">🔮 Your Prediction <span class="mut" style="text-transform:none;font-weight:400">(5 pts exact · 2 pts result)</span></div>
@@ -1337,9 +1389,36 @@ window.openMatch=(fid)=>{
     </div>`:''}
     <div id="predhist"></div>
     <p class="mut" style="font-size:11px;line-height:1.5">Lineups, possession and shot stats aren't provided by the free football data feed, and TV listings vary by country — check your local guide for the broadcast channel.</p>
-    <button class="btn ghost" style="margin-top:10px" onclick="document.querySelector('.modal').remove()">Close</button>`);
+    <button class="btn ghost" style="margin-top:10px" onclick="window.__OPEN_MATCH__=null;document.querySelector('.modal').remove()">Close</button>`);
   loadFixturePredictions(fid);
 };
+
+/* Patch an OPEN match-detail modal in place (score, status, goals, predictions)
+   without rebuilding it — so it never closes under the user and any score they
+   typed into the prediction inputs is preserved. */
+function refreshOpenMatch(){
+  const fid=window.__OPEN_MATCH__; if(!fid)return;
+  if(!document.querySelector('.modal')){window.__OPEN_MATCH__=null;return;}
+  const x=(LIVE_FIXTURES||[]).find(f=>String(f.id)===String(fid)); if(!x)return;
+  let det={goals:[],ht:[null,null]};
+  try{ if(x.detail) det=Object.assign(det,JSON.parse(x.detail)); }catch{}
+  const st=document.getElementById('mm-status');
+  if(st){const status = x.status==='LIVE'?'<span class="gold">● LIVE</span>'
+    : x.status==='FINISHED'?'Full Time' : (kickoffLabel(x.kickoff)||'Scheduled');
+    st.innerHTML=`${x.stage||''} · ${status}`;}
+  const sc=document.getElementById('mm-score');
+  if(sc)sc.textContent = x.status==='SCHEDULED' ? 'vs' : `${x.home_score??'–'} – ${x.away_score??'–'}`;
+  const ht=document.getElementById('mm-ht');
+  if(ht)ht.innerHTML=(det.ht&&det.ht[0]!=null)?`<div class="mut" style="font-size:11px;margin-top:6px">HT ${det.ht[0]} – ${det.ht[1]}</div>`:'';
+  const gl=document.getElementById('mm-goals');
+  if(gl)gl.innerHTML = det.goals.length ? det.goals.map(g=>
+    `<div class="between" style="font-size:13px;margin-bottom:6px">
+      <span>⚽ ${g.scorer||'?'} ${g.assist?`<span class="mut" style="font-size:11px">(assist: ${g.assist})</span>`:''}</span>
+      <span class="mono mut">${g.minute!=null?g.minute+"'":''} · ${g.team||''}</span></div>`).join('')
+    : `<div class="mut" style="font-size:12px">${x.status==='SCHEDULED'?'Goals appear here once the match kicks off.':'No goal data from the feed for this match.'}</div>`;
+  // Refresh the community predictions block (patches #predhist in place).
+  loadFixturePredictions(fid);
+}
 async function loadFixturePredictions(fid){
   if(!LIVE||!CUR_SWEEP)return;
   const el=document.getElementById('predhist'); if(!el)return;
@@ -1871,7 +1950,7 @@ async function refreshLive(){
       if(LAST_RANKS===null){LAST_RANKS={};board.forEach((r,i)=>{LAST_RANKS[r.participant_name]=i+1;});}
       else{activityFromLeaderboard(board);}
     }
-    applyLeaderboard(board);render();
+    applyLeaderboard(board);liveUpdate();
   }
   catch(e){console.warn('refresh failed',e)}
 }
@@ -1903,7 +1982,7 @@ function scheduleNextPoll(){
       await refreshLive();          // leaderboard (also seeds climbs)
       await loadFixtures();         // fixture statuses → moves finished out of Upcoming
       LAST_REFRESH_AT=new Date().toISOString();
-      render();
+      liveUpdate();                 // patch in place — no full re-render, no scroll jump
     }catch(e){/* keep polling regardless */}
     scheduleNextPoll();             // reschedule with a (possibly new) cadence
   }, pollIntervalMs());
@@ -1954,7 +2033,7 @@ let _visBound=false;
 function bindVisibilityRefresh(){
   if(_visBound)return; _visBound=true;
   document.addEventListener('visibilitychange',()=>{
-    if(!document.hidden && LIVE && SID){ refreshLive(); loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();render();}); scheduleNextPoll(); }
+    if(!document.hidden && LIVE && SID){ refreshLive(); loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();}); scheduleNextPoll(); }
   });
   window.addEventListener('focus',()=>{ if(LIVE&&SID){loadFixtures().then(()=>render());} });
 }
@@ -1970,7 +2049,7 @@ function startLive(sid){
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
       LAST_EVENT_AT=new Date().toISOString();
-      if(m.event==='leaderboard_updated'&&m.data.leaderboard){activityFromLeaderboard(m.data.leaderboard);applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();render();});}
+      if(m.event==='leaderboard_updated'&&m.data.leaderboard){activityFromLeaderboard(m.data.leaderboard);applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();});}
       else if(m.event==='participant_joined'){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
@@ -1984,11 +2063,11 @@ function startLive(sid){
         if(!Array.isArray(COMMENTS))COMMENTS=[];
         if(m.data&&m.data.id&&!COMMENTS.find(x=>x.id===m.data.id)){COMMENTS.push(m.data);renderChatList();}
         activityFromComment(m.data);     // surface in Recent Activity instantly
-        if(view==='home')render();
+        if(view==='home')liveUpdate();   // patch the activity card in place
         notifyChat(m.data);
       }
       else if(m.event==='fixtures_updated'){
-        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>{LAST_REFRESH_AT=new Date().toISOString();render();});PRED_BOARD=null;});
+        loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();});PRED_BOARD=null;});
       }
     }catch{}};
     ws.onclose=()=>{WS_STATUS='reconnecting';if(alive)setTimeout(open,1500)};
@@ -2158,13 +2237,14 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v33 · prediction-reveal</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v34 · in-place-updates</b></div>
       <div class="mut" style="margin-top:8px;font-size:11px;line-height:1.7">
         <div class="between"><span>Connection</span><b style="color:${WS_STATUS==='connected'?'var(--grn)':WS_STATUS==='reconnecting'?'var(--gold)':'var(--red)'}">${WS_STATUS==='connected'?'● Connected':WS_STATUS==='reconnecting'?'◌ Reconnecting':'○ Offline'}</b></div>
         <div class="between"><span>Refresh mode</span><b>${POLL_TIER==='live'?'Live · 8s':POLL_TIER==='upcoming'?'Upcoming · 60s':'Idle · 5m'}</b></div>
         <div class="between"><span>Last data refresh</span><b>${LAST_REFRESH_AT?timeAgo(LAST_REFRESH_AT):'—'}</b></div>
         <div class="between"><span>Last live event</span><b>${LAST_EVENT_AT?timeAgo(LAST_EVENT_AT):'—'}</b></div>
         <div class="between"><span>Fixtures loaded</span><b>${Array.isArray(LIVE_FIXTURES)?LIVE_FIXTURES.length:0}</b></div>
+        <div class="between"><span>Elements patched (last)</span><b>${UPDATED_COUNT}</b></div>
       </div>
       ${CUR_SWEEP?`<div class="mut" style="margin-top:8px;font-size:11px">
         <div>League ID: <b style="color:var(--txt);word-break:break-all">${CUR_SWEEP.id}</b></div>
