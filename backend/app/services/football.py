@@ -11,12 +11,15 @@ seed/sample data is used instead — handy for local dev and the demo.
 from datetime import datetime, timezone
 
 import json as _json
+import logging
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import Fixture, Sweepstake, Team
+
+log = logging.getLogger("football")
 
 # Map football-data.org stage labels to our compact stage codes.
 STAGE_MAP = {
@@ -151,18 +154,54 @@ async def fetch_standings(competition_code: str) -> dict:
     return groups
 
 
+# Feed health, surfaced to admins. Updated by every fetch attempt.
+FEED_HEALTH = {
+    "last_status": None,        # last HTTP status seen
+    "last_ok": None,            # ISO timestamp of last 200
+    "last_error_message": None, # provider's message on failure
+    "consecutive_failures": 0,
+}
+
+
+def _record_feed(status: int | None, message: str | None = None):
+    from datetime import datetime, timezone
+    FEED_HEALTH["last_status"] = status
+    if status == 200:
+        FEED_HEALTH["last_ok"] = datetime.now(timezone.utc).isoformat()
+        FEED_HEALTH["consecutive_failures"] = 0
+        FEED_HEALTH["last_error_message"] = None
+    else:
+        FEED_HEALTH["consecutive_failures"] += 1
+        if message:
+            FEED_HEALTH["last_error_message"] = message[:300]
+
+
 async def fetch_matches(competition_code: str) -> list:
     """Fetch raw match list for a competition once (so it can be shared across
-    all leagues on that competition in a single poll cycle)."""
+    all leagues on that competition in a single poll cycle).
+
+    Records feed health and does NOT silently swallow auth/permission errors —
+    a 403 means the plan isn't authorised for this competition.
+    """
     if is_offline() or not competition_code:
         return []
     url = f"{settings.FOOTBALL_API_URL}/competitions/{competition_code}/matches"
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(url, headers=_headers())
-            r.raise_for_status()
+            if r.status_code != 200:
+                msg = None
+                try:
+                    msg = r.json().get("message")
+                except Exception:
+                    msg = r.text[:200]
+                _record_feed(r.status_code, msg)
+                log.warning("matches fetch %s for %s: %s", r.status_code, competition_code, msg)
+                return []
+            _record_feed(200)
             return r.json().get("matches", [])
-    except Exception:
+    except Exception as e:
+        _record_feed(None, str(e))
         return []
 
 
