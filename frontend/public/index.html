@@ -1419,6 +1419,17 @@ function refreshOpenMatch(){
   // Refresh the community predictions block (patches #predhist in place).
   loadFixturePredictions(fid);
 }
+/* SINGLE SOURCE OF TRUTH for prediction visibility, mirroring the backend rule
+   exactly. A match's community predictions are revealed once it has started:
+   any non-scheduled status (Live/HT/2H/Finished/AET/penalties) OR the kick-off
+   time has passed (time fallback for when the feed is slow). Used by the modal
+   and the fixture rows so every tab behaves identically. */
+function isPredictionVisible(x){
+  if(!x)return false;
+  if(x.status && x.status!=='SCHEDULED')return true;       // live / finished / etc.
+  if(x.kickoff && new Date(x.kickoff)<=new Date())return true;  // kick-off passed
+  return false;
+}
 async function loadFixturePredictions(fid){
   if(!LIVE||!CUR_SWEEP)return;
   const el=document.getElementById('predhist'); if(!el)return;
@@ -1501,10 +1512,14 @@ function fxList(f){
   return list.map(x=>{
     const meta = x.live ? `<span class="gold">${x.st} ●</span>`
       : (x.status==='FINISHED' ? 'FT' : (kickoffLabel(x.kickoff)||'TBD'));
+    // Same visibility rule everywhere: revealed once started, hidden before.
+    const predHint = isPredictionVisible(x)
+      ? `<div class="mut" style="font-size:9px;margin-top:2px;color:var(--gold)">🔮 tap for predictions</div>`
+      : `<div class="mut" style="font-size:9px;margin-top:2px">🔒 predictions at kick-off</div>`;
     return `<div class="fx" style="cursor:pointer" onclick="openMatch('${x.id||''}')">
       <div class="fxteam">${flagImg(x.a,20)}${x.a}</div>
       <div style="text-align:center"><div class="score ${x.live?'lv':''}">${x.status==='SCHEDULED'?'vs':x.sa+' – '+x.sb}</div>
-        <div class="mut" style="font-size:10px;margin-top:4px">${meta}${x.stage?' · '+x.stage:''}</div>${x.venue?`<div class="mut" style="font-size:9px;margin-top:2px">📍 ${x.venue}</div>`:''}</div>
+        <div class="mut" style="font-size:10px;margin-top:4px">${meta}${x.stage?' · '+x.stage:''}</div>${x.venue?`<div class="mut" style="font-size:9px;margin-top:2px">📍 ${x.venue}</div>`:''}${predHint}</div>
       <div class="fxteam r">${x.b}${flagImg(x.b,20)}</div>
     </div>`;
   }).join('');
@@ -2237,7 +2252,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v34 · in-place-updates</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v35 · unified-predictions</b></div>
       <div class="mut" style="margin-top:8px;font-size:11px;line-height:1.7">
         <div class="between"><span>Connection</span><b style="color:${WS_STATUS==='connected'?'var(--grn)':WS_STATUS==='reconnecting'?'var(--gold)':'var(--red)'}">${WS_STATUS==='connected'?'● Connected':WS_STATUS==='reconnecting'?'◌ Reconnecting':'○ Offline'}</b></div>
         <div class="between"><span>Refresh mode</span><b>${POLL_TIER==='live'?'Live · 8s':POLL_TIER==='upcoming'?'Upcoming · 60s':'Idle · 5m'}</b></div>
