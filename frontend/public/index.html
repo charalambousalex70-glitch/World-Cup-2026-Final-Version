@@ -1900,6 +1900,33 @@ function scheduleNextPoll(){
   }, pollIntervalMs());
 }
 
+/* Fetch the raw feed diagnostics through the app (so the auth token is used)
+   and show it in a readable modal — tells us if the data source has live data. */
+window.checkFeed=async()=>{
+  if(!LIVE||!CUR_SWEEP){toast('Open a league first','🔧');return;}
+  toast('Asking the data feed…','🔬');
+  try{
+    const d=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/standings/debug`);
+    const fx=(LIVE_FIXTURES||[]);
+    const counts=fx.reduce((a,x)=>{a[x.status]=(a[x.status]||0)+1;return a;},{});
+    modal(`<h2 style="font-size:19px;margin-bottom:10px">🔬 Data Feed Check</h2>
+      <div class="card" style="font-size:12px;margin-bottom:10px">
+        <div class="between"><span class="mut">Competition</span><b>${d.competition_code||'—'}</b></div>
+        <div class="between"><span class="mut">Feed HTTP status</span><b style="color:${d.http_status===200?'var(--grn)':'var(--red)'}">${d.http_status??'—'}</b></div>
+        <div class="between"><span class="mut">API key set</span><b>${d.api_key_configured?'yes':'no'}</b></div>
+        <div class="between"><span class="mut">Standings blocks</span><b>${d.standings_blocks??0}</b></div>
+        <div class="between"><span class="mut">Parsed groups</span><b>${(d.parsed_groups||[]).length}</b></div>
+      </div>
+      <div class="card" style="font-size:12px;margin-bottom:10px">
+        <div class="label" style="margin-bottom:6px">Your fixtures by status</div>
+        <div class="between"><span class="mut">Scheduled</span><b>${counts.SCHEDULED||0}</b></div>
+        <div class="between"><span class="mut">Live</span><b>${counts.LIVE||0}</b></div>
+        <div class="between"><span class="mut">Finished</span><b>${counts.FINISHED||0}</b></div>
+      </div>
+      <p class="mut" style="font-size:11px;line-height:1.6">If matches you know have been played still show as Scheduled here, the football data feed hasn't reported them yet — that's a data-source limitation, not the app.</p>
+      <button class="btn ghost" style="margin-top:10px" onclick="document.querySelector('.modal').remove()">Close</button>`);
+  }catch(e){toast('Feed check failed: '+(e.message||'error'),'⚠️');}
+};
 window.manualRefresh=async()=>{
   if(!LIVE||!SID){toast('Not connected to a league','🔧');return;}
   toast('Refreshing…','↻');
@@ -2117,7 +2144,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v27 · poller-health</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v28 · feed-check</b></div>
       <div class="mut" style="margin-top:8px;font-size:11px;line-height:1.7">
         <div class="between"><span>Connection</span><b style="color:${WS_STATUS==='connected'?'var(--grn)':WS_STATUS==='reconnecting'?'var(--gold)':'var(--red)'}">${WS_STATUS==='connected'?'● Connected':WS_STATUS==='reconnecting'?'◌ Reconnecting':'○ Offline'}</b></div>
         <div class="between"><span>Refresh mode</span><b>${POLL_TIER==='live'?'Live · 8s':POLL_TIER==='upcoming'?'Upcoming · 60s':'Idle · 5m'}</b></div>
@@ -2125,7 +2152,11 @@ window.showDiag=async()=>{
         <div class="between"><span>Last live event</span><b>${LAST_EVENT_AT?timeAgo(LAST_EVENT_AT):'—'}</b></div>
         <div class="between"><span>Fixtures loaded</span><b>${Array.isArray(LIVE_FIXTURES)?LIVE_FIXTURES.length:0}</b></div>
       </div>
-      <button class="btn ghost" style="margin-top:10px;padding:8px" onclick="manualRefresh()">↻ Force refresh now</button>
+      ${CUR_SWEEP?`<div class="mut" style="margin-top:8px;font-size:11px">
+        <div>League ID: <b style="color:var(--txt);word-break:break-all">${CUR_SWEEP.id}</b></div>
+      </div>
+      <button class="btn ghost" style="margin-top:8px;padding:8px;font-size:12px" onclick="checkFeed()">🔬 Check what the feed is sending</button>`:'<div class="mut" style="margin-top:8px;font-size:11px">Open a league to check its data feed.</div>'}
+      <button class="btn ghost" style="margin-top:8px;padding:8px" onclick="manualRefresh()">↻ Force refresh now</button>
     </div>
     <button class="btn gold" onclick="setApiUrl(document.querySelector('#diagurl').value)">Save & Reconnect</button>
     <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Close</button>`);
