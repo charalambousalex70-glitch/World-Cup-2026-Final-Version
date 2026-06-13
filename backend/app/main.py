@@ -84,6 +84,31 @@ app.include_router(sweepstakes.router, prefix=settings.API_V1)
 app.include_router(ws_routes.router)  # WebSockets are not under /api/v1
 
 
+# Global error handler: log the real traceback (so 500s are debuggable in the
+# Render logs) AND return permissive CORS headers on the error response. Without
+# this, an unhandled exception skips the CORS middleware and the browser reports
+# a confusing "No Access-Control-Allow-Origin" error instead of the real 500.
+import logging as _logging
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+_err_log = _logging.getLogger("api.errors")
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: _Request, exc: Exception):
+    _err_log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    origin = request.headers.get("origin", "*")
+    return _JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "where": request.url.path},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
+
+
 @app.get("/", tags=["meta"])
 @app.head("/", tags=["meta"])
 async def root():
@@ -104,5 +129,5 @@ async def health():
     from app.services.football import FEED_HEALTH
     _k = settings.FOOTBALL_API_KEY or ""
     return {"status": "ok", "service": settings.PROJECT_NAME,
-            "build": "v33-prediction-reveal", "poller": POLLER_STATS, "feed": FEED_HEALTH,
+            "build": "v38-cors-500-fix", "poller": POLLER_STATS, "feed": FEED_HEALTH,
             "api_key_fingerprint": (f"{_k[:4]}…{_k[-4:]} (len {len(_k)})" if _k else "MISSING")}
