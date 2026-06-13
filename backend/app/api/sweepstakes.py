@@ -698,6 +698,10 @@ async def standings_debug(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
         raise HTTPException(404, "Not found")
     info = {"competition_code": sweep.competition_code,
             "api_key_configured": bool(getattr(settings, "FOOTBALL_API_KEY", None))}
+    # Masked fingerprint of the key actually in use, so it can be compared
+    # against the token shown in the football-data.org account without exposing it.
+    _k = getattr(settings, "FOOTBALL_API_KEY", "") or ""
+    info["api_key_fingerprint"] = (f"{_k[:4]}…{_k[-4:]} (len {len(_k)})" if _k else "MISSING")
     url = f"{settings.FOOTBALL_API_URL}/competitions/{sweep.competition_code}/standings"
     info["url"] = url
     try:
