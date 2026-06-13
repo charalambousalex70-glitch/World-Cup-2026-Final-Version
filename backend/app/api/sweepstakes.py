@@ -670,7 +670,7 @@ async def fixture_predictions(sid: uuid.UUID, fid: uuid.UUID,
         return {"locked": True, "count": len(rows), "predictions": [],
                 "you": {"home": mine.home_pred, "away": mine.away_pred} if mine else None}
     users = {u.id: u for u in (
-        await db.execute(select(User)).scalars().all()
+        (await db.execute(select(User))).scalars().all()
     )}
     finished = fx.status == "FINISHED"
     out = []
