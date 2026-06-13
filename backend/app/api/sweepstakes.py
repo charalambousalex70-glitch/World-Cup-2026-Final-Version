@@ -718,4 +718,27 @@ async def standings_debug(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     parsed = await football.fetch_standings(sweep.competition_code)
     info["parsed_groups"] = list(parsed.keys())
     info["parsed_total_rows"] = sum(len(v) for v in parsed.values())
+
+    # ALSO probe the matches endpoint — this is the one that drives live scores.
+    # The standings 403 may be plan-specific; what matters for live updates is
+    # whether /matches returns data and with what status.
+    murl = f"{settings.FOOTBALL_API_URL}/competitions/{sweep.competition_code}/matches"
+    info["matches_url"] = murl
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            mr = await client.get(murl, headers=football._headers())
+            info["matches_http_status"] = mr.status_code
+            try:
+                mdata = mr.json()
+                ms = mdata.get("matches", [])
+                info["matches_count"] = len(ms)
+                # status breakdown straight from the feed (not our DB)
+                from collections import Counter
+                info["matches_status_breakdown"] = dict(Counter(m.get("status") for m in ms))
+                info["matches_error_message"] = mdata.get("message")
+            except Exception as e:
+                info["matches_json_error"] = str(e)[:200]
+                info["matches_body_snippet"] = mr.text[:300]
+    except Exception as e:
+        info["matches_request_error"] = str(e)[:200]
     return info

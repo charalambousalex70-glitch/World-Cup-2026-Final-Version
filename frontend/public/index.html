@@ -1912,18 +1912,23 @@ window.checkFeed=async()=>{
     modal(`<h2 style="font-size:19px;margin-bottom:10px">🔬 Data Feed Check</h2>
       <div class="card" style="font-size:12px;margin-bottom:10px">
         <div class="between"><span class="mut">Competition</span><b>${d.competition_code||'—'}</b></div>
-        <div class="between"><span class="mut">Feed HTTP status</span><b style="color:${d.http_status===200?'var(--grn)':'var(--red)'}">${d.http_status??'—'}</b></div>
+        <div class="between"><span class="mut">Matches feed status</span><b style="color:${d.matches_http_status===200?'var(--grn)':'var(--red)'}">${d.matches_http_status??'—'}</b></div>
+        <div class="between"><span class="mut">Matches returned</span><b>${d.matches_count??0}</b></div>
+        <div class="between"><span class="mut">Standings feed status</span><b style="color:${d.http_status===200?'var(--grn)':'var(--red)'}">${d.http_status??'—'}</b></div>
         <div class="between"><span class="mut">API key set</span><b>${d.api_key_configured?'yes':'no'}</b></div>
-        <div class="between"><span class="mut">Standings blocks</span><b>${d.standings_blocks??0}</b></div>
-        <div class="between"><span class="mut">Parsed groups</span><b>${(d.parsed_groups||[]).length}</b></div>
       </div>
+      ${d.matches_status_breakdown?`<div class="card" style="font-size:12px;margin-bottom:10px">
+        <div class="label" style="margin-bottom:6px">Feed's match statuses (live source)</div>
+        ${Object.entries(d.matches_status_breakdown).map(([k,v])=>`<div class="between"><span class="mut">${k}</span><b>${v}</b></div>`).join('')}
+      </div>`:''}
+      ${(d.matches_error_message||d.error_message)?`<div class="card" style="font-size:12px;margin-bottom:10px;color:var(--red)">Feed says: ${d.matches_error_message||d.error_message}</div>`:''}
       <div class="card" style="font-size:12px;margin-bottom:10px">
-        <div class="label" style="margin-bottom:6px">Your fixtures by status</div>
+        <div class="label" style="margin-bottom:6px">Your stored fixtures</div>
         <div class="between"><span class="mut">Scheduled</span><b>${counts.SCHEDULED||0}</b></div>
         <div class="between"><span class="mut">Live</span><b>${counts.LIVE||0}</b></div>
         <div class="between"><span class="mut">Finished</span><b>${counts.FINISHED||0}</b></div>
       </div>
-      <p class="mut" style="font-size:11px;line-height:1.6">If matches you know have been played still show as Scheduled here, the football data feed hasn't reported them yet — that's a data-source limitation, not the app.</p>
+      <p class="mut" style="font-size:11px;line-height:1.6">If "Matches feed status" is 403, the API key/plan isn't authorised for this competition's match data. If it's 200 but matches still show Scheduled, the feed hasn't flipped them yet.</p>
       <button class="btn ghost" style="margin-top:10px" onclick="document.querySelector('.modal').remove()">Close</button>`);
   }catch(e){toast('Feed check failed: '+(e.message||'error'),'⚠️');}
 };
@@ -2144,7 +2149,7 @@ window.showDiag=async()=>{
       <div class="between"><span class="mut">Health check</span><span>${health}</span></div>
       ${LAST_ERR?`<div style="margin-top:8px;color:var(--red);font-size:11px;line-height:1.4">${LAST_ERR}</div>`:''}
       <div class="mut" style="margin-top:8px;font-size:11px">This site's address (for CORS_ORIGINS):<br><b style="color:var(--txt)">${location.origin}</b></div>
-      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v28 · feed-check</b></div>
+      <div class="mut" style="margin-top:8px;font-size:11px">App build: <b style="color:var(--gold)">v29 · matches-feed-probe</b></div>
       <div class="mut" style="margin-top:8px;font-size:11px;line-height:1.7">
         <div class="between"><span>Connection</span><b style="color:${WS_STATUS==='connected'?'var(--grn)':WS_STATUS==='reconnecting'?'var(--gold)':'var(--red)'}">${WS_STATUS==='connected'?'● Connected':WS_STATUS==='reconnecting'?'◌ Reconnecting':'○ Offline'}</b></div>
         <div class="between"><span>Refresh mode</span><b>${POLL_TIER==='live'?'Live · 8s':POLL_TIER==='upcoming'?'Upcoming · 60s':'Idle · 5m'}</b></div>
