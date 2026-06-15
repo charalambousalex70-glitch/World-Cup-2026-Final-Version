@@ -599,9 +599,11 @@ async def predictions_board(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
 async def prediction_history(sid: uuid.UUID, uid: uuid.UUID,
                              db: AsyncSession = Depends(get_db),
                              user: User = Depends(get_current_user)):
-    """Match-by-match prediction history for one participant. Uses the exact
-    same _pred_points scoring as the board, so totals always agree. Unfinished
-    matches are returned as 'pending' (no settled points)."""
+    """Score-explanation layer for one participant: ONLY settled (finished)
+    matches are returned. Pending / upcoming / live-unsettled predictions are
+    never included — sending another user's unplayed picks would leak their
+    future predictions and enable cheating. Totals are therefore finished-only
+    and equal the participant's board score (same _pred_points path)."""
     u = await db.get(User, uid)
     if not u:
         raise HTTPException(404, "Player not found")
@@ -616,28 +618,27 @@ async def prediction_history(sid: uuid.UUID, uid: uuid.UUID,
     total_pts = exact = results = 0
     for pr in preds:
         fx = fixtures.get(pr.fixture_id)
-        if not fx:
+        # FINISHED matches only. Anything not yet settled (scheduled / live /
+        # missing score) is treated as private and excluded entirely — it is
+        # not added to the list and not counted in any total.
+        if not fx or fx.status != "FINISHED" or fx.home_score is None or fx.away_score is None:
             continue
-        finished = fx.status == "FINISHED"
-        pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score) if finished else None
-        if finished:
-            total_pts += pts
-            if pts == 5: exact += 1
-            elif pts == 2: results += 1
-            outcome = "exact" if pts == 5 else ("result" if pts == 2 else "none")
-        else:
-            outcome = "pending"
+        pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score)
+        total_pts += pts
+        if pts == 5: exact += 1
+        elif pts == 2: results += 1
+        outcome = "exact" if pts == 5 else ("result" if pts == 2 else "none")
         items.append({
             "home_team": fx.home_team, "away_team": fx.away_team,
             "stage": fx.stage, "kickoff": fx.kickoff.isoformat() if fx.kickoff else None,
-            "status": fx.status,
             "pred_home": pr.home_pred, "pred_away": pr.away_pred,
             "act_home": fx.home_score, "act_away": fx.away_score,
             "points": pts, "outcome": outcome,
         })
-    # Settled first (best points), then pending by kickoff.
-    order = {"exact": 0, "result": 1, "none": 2, "pending": 3}
-    items.sort(key=lambda r: (order.get(r["outcome"], 9), -(r["points"] or 0), r["kickoff"] or ""))
+    # Best outcomes first, then most recent kickoff.
+    order = {"exact": 0, "result": 1, "none": 2}
+    items.sort(key=lambda r: (order.get(r["outcome"], 9), -r["points"], r["kickoff"] or ""))
+    # 'total' = settled predictions shown (finished-only), matching the score.
     return {"username": u.username, "avatar_color": u.avatar_color,
             "points": total_pts, "exact": exact, "results": results,
             "total": len(items), "items": items}
