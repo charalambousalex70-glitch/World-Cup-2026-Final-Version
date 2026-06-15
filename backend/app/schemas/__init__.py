@@ -94,6 +94,8 @@ class SweepstakeOut(BaseModel):
     pay_link: str | None = None
     pay_bank: str | None = None
     pay_beneficiary: str | None = None
+    pay_iban: str | None = None
+    pay_bic: str | None = None
     pay_sort_code: str | None = None
     pay_account: str | None = None
     participants: list[ParticipantOut] = []
