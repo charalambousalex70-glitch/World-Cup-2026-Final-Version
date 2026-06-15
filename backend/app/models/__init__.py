@@ -69,6 +69,9 @@ class Sweepstake(Base):
     pay_link: Mapped[str | None] = mapped_column(String(500))
     pay_bank: Mapped[str | None] = mapped_column(String(120))
     pay_beneficiary: Mapped[str | None] = mapped_column(String(120))
+    # Shared international account (same IBAN + BIC/SWIFT for EUR and USD).
+    pay_iban: Mapped[str | None] = mapped_column(String(40))
+    pay_bic: Mapped[str | None] = mapped_column(String(20))
     pay_sort_code: Mapped[str | None] = mapped_column(String(20))
     pay_account: Mapped[str | None] = mapped_column(String(40))
 
