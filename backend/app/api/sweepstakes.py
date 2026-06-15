@@ -182,7 +182,7 @@ async def update_sweepstake(sid: uuid.UUID, body: dict,
     # Payment details (admin-only — _require_admin already enforced above).
     # Each is optional; empty string clears the field.
     _PAY = {"pay_link": 500, "pay_bank": 120, "pay_beneficiary": 120,
-            "pay_sort_code": 20, "pay_account": 40}
+            "pay_iban": 40, "pay_bic": 20, "pay_sort_code": 20, "pay_account": 40}
     for field, maxlen in _PAY.items():
         if field in body:
             val = body[field]
