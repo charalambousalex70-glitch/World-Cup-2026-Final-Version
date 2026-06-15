@@ -579,18 +579,68 @@ async def predictions_board(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     agg: dict = {}
     for pr in preds:
         fx = fixtures.get(pr.fixture_id)
-        if not fx or fx.status != "FINISHED": continue
+        if not fx: continue
+        a = agg.setdefault(pr.user_id, {"points": 0, "exact": 0, "results": 0, "total": 0})
+        a["total"] += 1
+        if fx.status != "FINISHED": continue
         pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score)
-        a = agg.setdefault(pr.user_id, {"points": 0, "exact": 0, "results": 0})
         a["points"] += pts
         if pts == 5: a["exact"] += 1
         elif pts == 2: a["results"] += 1
     out = []
     for uid, u in users.items():
-        a = agg.get(uid, {"points": 0, "exact": 0, "results": 0})
-        out.append(PredBoardRow(username=u.username, avatar_color=u.avatar_color, **a))
+        a = agg.get(uid, {"points": 0, "exact": 0, "results": 0, "total": 0})
+        out.append(PredBoardRow(user_id=uid, username=u.username, avatar_color=u.avatar_color, **a))
     out.sort(key=lambda r: (-r.points, -r.exact, r.username.lower()))
     return out
+
+
+@router.get("/{sid}/predictions/history/{uid}")
+async def prediction_history(sid: uuid.UUID, uid: uuid.UUID,
+                             db: AsyncSession = Depends(get_db),
+                             user: User = Depends(get_current_user)):
+    """Match-by-match prediction history for one participant. Uses the exact
+    same _pred_points scoring as the board, so totals always agree. Unfinished
+    matches are returned as 'pending' (no settled points)."""
+    u = await db.get(User, uid)
+    if not u:
+        raise HTTPException(404, "Player not found")
+    preds = (
+        await db.execute(select(Prediction).where(
+            Prediction.sweepstake_id == sid, Prediction.user_id == uid))
+    ).scalars().all()
+    fixtures = {f.id: f for f in (
+        await db.execute(select(Fixture).where(Fixture.sweepstake_id == sid))
+    ).scalars().all()}
+    items = []
+    total_pts = exact = results = 0
+    for pr in preds:
+        fx = fixtures.get(pr.fixture_id)
+        if not fx:
+            continue
+        finished = fx.status == "FINISHED"
+        pts = _pred_points(pr.home_pred, pr.away_pred, fx.home_score, fx.away_score) if finished else None
+        if finished:
+            total_pts += pts
+            if pts == 5: exact += 1
+            elif pts == 2: results += 1
+            outcome = "exact" if pts == 5 else ("result" if pts == 2 else "none")
+        else:
+            outcome = "pending"
+        items.append({
+            "home_team": fx.home_team, "away_team": fx.away_team,
+            "stage": fx.stage, "kickoff": fx.kickoff.isoformat() if fx.kickoff else None,
+            "status": fx.status,
+            "pred_home": pr.home_pred, "pred_away": pr.away_pred,
+            "act_home": fx.home_score, "act_away": fx.away_score,
+            "points": pts, "outcome": outcome,
+        })
+    # Settled first (best points), then pending by kickoff.
+    order = {"exact": 0, "result": 1, "none": 2, "pending": 3}
+    items.sort(key=lambda r: (order.get(r["outcome"], 9), -(r["points"] or 0), r["kickoff"] or ""))
+    return {"username": u.username, "avatar_color": u.avatar_color,
+            "points": total_pts, "exact": exact, "results": results,
+            "total": len(items), "items": items}
 
 
 @router.get("/{sid}/draw/audit")
