@@ -91,6 +91,11 @@ class SweepstakeOut(BaseModel):
     start_date: datetime | None
     admin_id: uuid.UUID
     prize_pool: float
+    pay_link: str | None = None
+    pay_bank: str | None = None
+    pay_beneficiary: str | None = None
+    pay_sort_code: str | None = None
+    pay_account: str | None = None
     participants: list[ParticipantOut] = []
     prize_tiers: list[PrizeTierOut] = []
 
