@@ -65,6 +65,12 @@ class Sweepstake(Base):
     draw_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     draw_audit: Mapped[str | None] = mapped_column(Text)  # provably-fair audit JSON
     standings: Mapped[str | None] = mapped_column(Text)  # cached group standings JSON
+    # Payment details — set by the admin, viewed read-only by participants.
+    pay_link: Mapped[str | None] = mapped_column(String(500))
+    pay_bank: Mapped[str | None] = mapped_column(String(120))
+    pay_beneficiary: Mapped[str | None] = mapped_column(String(120))
+    pay_sort_code: Mapped[str | None] = mapped_column(String(20))
+    pay_account: Mapped[str | None] = mapped_column(String(40))
 
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
