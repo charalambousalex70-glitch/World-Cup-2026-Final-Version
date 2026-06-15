@@ -186,8 +186,10 @@ class PredictionOut(BaseModel):
 
 
 class PredBoardRow(BaseModel):
+    user_id: uuid.UUID | None = None
     username: str
     avatar_color: str = "#888"
     points: int = 0
     exact: int = 0
     results: int = 0
+    total: int = 0   # predictions made (settled + pending)
