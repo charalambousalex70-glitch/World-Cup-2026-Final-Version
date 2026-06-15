@@ -179,6 +179,20 @@ async def update_sweepstake(sid: uuid.UUID, body: dict,
             )
         sweep.max_participants = cap
 
+    # Payment details (admin-only — _require_admin already enforced above).
+    # Each is optional; empty string clears the field.
+    _PAY = {"pay_link": 500, "pay_bank": 120, "pay_beneficiary": 120,
+            "pay_sort_code": 20, "pay_account": 40}
+    for field, maxlen in _PAY.items():
+        if field in body:
+            val = body[field]
+            val = (str(val).strip()[:maxlen]) if val not in (None, "") else None
+            if field == "pay_link" and val:
+                # Only allow http(s) links; never javascript:/data: schemes.
+                if not (val.startswith("http://") or val.startswith("https://")):
+                    val = "https://" + val
+            setattr(sweep, field, val)
+
     await db.flush()
     await db.refresh(sweep)   # ensure we read back the just-saved values
     full = await _load_full(db, sid)
