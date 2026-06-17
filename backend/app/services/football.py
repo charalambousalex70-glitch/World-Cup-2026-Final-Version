@@ -101,7 +101,10 @@ FLAGS = {
 
 
 def _headers() -> dict:
-    return {"X-Auth-Token": settings.FOOTBALL_API_KEY}
+    # X-Api-Version v4.1 unlocks the live `minute` and `injuryTime` fields.
+    # It's backward-safe: existing fields are unchanged, and the new fields are
+    # simply absent (handled as null downstream) on matches that don't have them.
+    return {"X-Auth-Token": settings.FOOTBALL_API_KEY, "X-Api-Version": "v4.1"}
 
 
 def is_offline() -> bool:
@@ -287,6 +290,17 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake, matches=None) 
             for g in (m.get("goals") or [])
         ]
         ht = (m.get("score", {}).get("halfTime") or {})
+        # Live clock (v4.1): present only on in-play matches; absent/null otherwise.
+        minute = m.get("minute")
+        injury = m.get("injuryTime")
+        try:
+            minute = int(minute) if minute is not None else None
+        except (TypeError, ValueError):
+            minute = None
+        try:
+            injury = int(injury) if injury not in (None, 0, "0") else None
+        except (TypeError, ValueError):
+            injury = None
         # 'winner' from the feed is HOME_TEAM / AWAY_TEAM / DRAW and already
         # reflects penalty-shootout outcomes in knockout ties.
         winner_code = (m.get("score") or {}).get("winner")
@@ -294,7 +308,10 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake, matches=None) 
             "goals": goals,
             "ht": [ht.get("home"), ht.get("away")],
             "winner": winner_code,
-        }) if (goals or ht.get("home") is not None or winner_code) else None
+            "minute": minute,
+            "injury": injury,
+            "paused": status == "PAUSED",
+        }) if (goals or ht.get("home") is not None or winner_code or minute is not None or status == "PAUSED") else None
 
         fx = existing.get(ext)
         if fx is None:
@@ -311,6 +328,18 @@ async def sync_fixtures(db: AsyncSession, sweepstake: Sweepstake, matches=None) 
             changed.append({"fx": fx, "prev_status": fx.status,
                             "prev_hs": fx.home_score, "prev_as": fx.away_score,
                             "prev_goals": prev_goals})
+        else:
+            # Score/status unchanged but the live minute may have ticked — update
+            # the stored detail quietly without adding to `changed` (no goal-bot
+            # spam), so the next fixtures payload carries a fresh clock.
+            if norm_status == "LIVE" and fx.detail:
+                try:
+                    d = _json.loads(fx.detail) or {}
+                    if d.get("minute") != minute or d.get("injury") != injury:
+                        d["minute"], d["injury"] = minute, injury
+                        fx.detail = _json.dumps(d)
+                except Exception:
+                    pass
 
         fx.home_team, fx.away_team = home, away
         fx.home_score, fx.away_score = hs, as_
