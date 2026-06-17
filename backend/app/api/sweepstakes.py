@@ -128,7 +128,15 @@ async def get_sweepstake(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     sweep = await _load_full(db, sid)
     if not sweep:
         raise HTTPException(404, "Sweepstake not found")
-    return SweepstakeOut.model_validate(sweep)
+    out = SweepstakeOut.model_validate(sweep)
+    # Privacy: participant emails are personal data. Only the league admin sees
+    # them; for everyone else we blank the field before returning. (The username
+    # and avatar stay visible so the leaderboard etc. still work.)
+    if sweep.admin_id != user.id:
+        for p in out.participants:
+            if getattr(p, "user", None) is not None:
+                p.user.email = ""
+    return out
 
 
 @router.patch("/{sid}", response_model=SweepstakeOut)
