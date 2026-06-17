@@ -86,6 +86,87 @@ async def me(user: User = Depends(get_current_user)):
     return UserOut.model_validate(user)
 
 
+# ---------------- Password reset (admin-assisted, no email needed) ----------------
+import hashlib
+from datetime import datetime, timedelta, timezone
+
+
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+@router.post("/reset/request")
+async def reset_request(body: dict, db: AsyncSession = Depends(get_db)):
+    """A user asks to reset. We generate a 6-digit code, store only its hash with
+    a 30-minute expiry, and DO NOT return it here — that would let anyone reset
+    anyone's password just by knowing an email. The league admin relays the code
+    to the user through a trusted channel (see /reset/code, admin-only).
+    Always returns the same message whether or not the email exists, so this
+    can't be used to discover who has an account."""
+    email = _normalise_email(body.get("email", ""))
+    user = await _find_user_by_email(db, email)
+    if user:
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        user.reset_code_hash = _hash_code(code)
+        user.reset_expires = datetime.now(timezone.utc) + timedelta(minutes=30)
+        await db.flush()
+    return {"message": "If that account exists, your league admin can now share a reset code with you."}
+
+
+@router.get("/reset/code")
+async def reset_code(email: str, db: AsyncSession = Depends(get_db),
+                     admin: User = Depends(get_current_user)):
+    """Admin-only: retrieve the ACTIVE reset code for a user so it can be relayed
+    through a trusted channel. Requires the caller to be the admin of at least
+    one league that the target user belongs to — so random users can't read
+    others' codes. The code itself isn't stored in plaintext, so we re-issue a
+    fresh one here and return it to the admin only."""
+    from app.models import Sweepstake, Participant
+    email = _normalise_email(email)
+    target = await _find_user_by_email(db, email)
+    if not target:
+        raise HTTPException(404, "No account with that email")
+    # Verify caller administers a league the target is in.
+    shared = (await db.execute(
+        select(Sweepstake.id)
+        .join(Participant, Participant.sweepstake_id == Sweepstake.id)
+        .where(Sweepstake.admin_id == admin.id, Participant.user_id == target.id)
+    )).first()
+    if not shared and admin.id != target.id:
+        raise HTTPException(403, "You can only reset codes for players in leagues you administer")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    target.reset_code_hash = _hash_code(code)
+    target.reset_expires = datetime.now(timezone.utc) + timedelta(minutes=30)
+    await db.flush()
+    return {"email": target.email, "code": code, "expires_minutes": 30,
+            "note": "Share this with the user through a trusted channel. It expires in 30 minutes."}
+
+
+@router.post("/reset/confirm", response_model=Token)
+async def reset_confirm(body: dict, db: AsyncSession = Depends(get_db)):
+    """The user submits email + code + new password. We verify the code against
+    the stored hash and its expiry, then set a fresh password hash. The old
+    password is never seen or needed."""
+    email = _normalise_email(body.get("email", ""))
+    code = str(body.get("code", "")).strip()
+    new_password = body.get("password", "")
+    if len(new_password) < 6:
+        raise HTTPException(422, "New password must be at least 6 characters")
+    user = await _find_user_by_email(db, email)
+    if not user or not user.reset_code_hash or not user.reset_expires:
+        raise HTTPException(400, "No reset is pending for that account. Request a new code.")
+    if user.reset_expires < datetime.now(timezone.utc):
+        raise HTTPException(400, "That code has expired. Request a new one.")
+    if _hash_code(code) != user.reset_code_hash:
+        raise HTTPException(400, "Incorrect reset code.")
+    user.hashed_password = hash_password(new_password)
+    user.reset_code_hash = None
+    user.reset_expires = None
+    await db.flush()
+    token = create_access_token(str(user.id))
+    return Token(access_token=token, user=UserOut.model_validate(user))
+
+
 @router.patch("/me", response_model=UserOut)
 async def update_me(body: dict, db: AsyncSession = Depends(get_db),
                     user: User = Depends(get_current_user)):
