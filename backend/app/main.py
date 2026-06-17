@@ -41,6 +41,8 @@ async def lifespan(app: FastAPI):
                 "ALTER TABLE sweepstakes ADD COLUMN IF NOT EXISTS pay_bic VARCHAR(20)",
                 "ALTER TABLE sweepstakes ADD COLUMN IF NOT EXISTS pay_sort_code VARCHAR(20)",
                 "ALTER TABLE sweepstakes ADD COLUMN IF NOT EXISTS pay_account VARCHAR(40)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_code_hash VARCHAR(255)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ",
             ):
                 await conn.execute(text(ddl))
         except Exception:
@@ -136,5 +138,5 @@ async def health():
     from app.services.football import FEED_HEALTH
     _k = settings.FOOTBALL_API_KEY or ""
     return {"status": "ok", "service": settings.PROJECT_NAME,
-            "build": "v49-eur-usd-account", "poller": POLLER_STATS, "feed": FEED_HEALTH,
+            "build": "v54-auth-reset-eye", "poller": POLLER_STATS, "feed": FEED_HEALTH,
             "api_key_fingerprint": (f"{_k[:4]}…{_k[-4:]} (len {len(_k)})" if _k else "MISSING")}
