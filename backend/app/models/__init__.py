@@ -40,6 +40,10 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(500))
     avatar_color: Mapped[str] = mapped_column(String(9), default="#ffc83d")
+    # Password reset: a short-lived hashed code + its expiry. Never store the
+    # raw code; we store its hash exactly like a password.
+    reset_code_hash: Mapped[str | None] = mapped_column(String(255))
+    reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     sweepstakes: Mapped[list["Sweepstake"]] = relationship(back_populates="admin")
