@@ -818,6 +818,21 @@ async def standings_debug(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
                 from collections import Counter
                 info["matches_status_breakdown"] = dict(Counter(m.get("status") for m in ms))
                 info["matches_error_message"] = mdata.get("message")
+                # LIVE-CLOCK PROBE: for in-play matches, show the raw clock fields
+                # exactly as the feed returns them. This tells us whether v4.1's
+                # minute/injuryTime are actually being served, vs missing.
+                live_probe = []
+                for m in ms:
+                    if m.get("status") in ("IN_PLAY", "PAUSED"):
+                        live_probe.append({
+                            "match": f'{(m.get("homeTeam") or {}).get("name")} v {(m.get("awayTeam") or {}).get("name")}',
+                            "status": m.get("status"),
+                            "minute": m.get("minute"),          # None if feed/tier omits it
+                            "injuryTime": m.get("injuryTime"),
+                            "has_minute_key": "minute" in m,
+                        })
+                info["live_clock_probe"] = live_probe or "no IN_PLAY/PAUSED matches right now"
+                info["sent_api_version_header"] = football._headers().get("X-Api-Version")
             except Exception as e:
                 info["matches_json_error"] = str(e)[:200]
                 info["matches_body_snippet"] = mr.text[:300]
