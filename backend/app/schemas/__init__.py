@@ -20,7 +20,7 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
-    email: EmailStr
+    email: str = ""   # plain str (not EmailStr) so it can be blanked for non-admins
     username: str
     avatar_url: str | None = None
     avatar_color: str
