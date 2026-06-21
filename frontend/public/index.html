@@ -7,9 +7,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="LuckPot">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
-  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="icon" href="/favicon.ico?v=61" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png?v=61">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg?v=61">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png?v=61">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png?v=61">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
@@ -51,11 +53,14 @@ h1,h2,h3,.disp{font-family:'Anton',sans-serif;font-weight:400;letter-spacing:.5p
 .top{display:flex;align-items:center;gap:12px;padding:calc(18px + env(safe-area-inset-top)) 16px 12px;position:sticky;top:0;z-index:30;
   background:linear-gradient(var(--navy) 70%, transparent);backdrop-filter:blur(4px)}
 .logo{display:flex;align-items:center;gap:9px;font-family:'Anton';font-size:21px;letter-spacing:.5px}
-.ball{width:30px;height:30px;border-radius:50%;background:
-  radial-gradient(circle at 35% 30%,#fff,#cfd6e6 60%,#9aa6c2);position:relative;flex:none;
-  box-shadow:0 4px 14px rgba(0,0,0,.4),inset 0 -6px 10px rgba(0,0,0,.25)}
-.ball:before{content:"";position:absolute;inset:0;border-radius:50%;
-  background:radial-gradient(circle at 50% 50%,#0a0e1a 0 18%,transparent 19%);clip-path:polygon(50% 5%,62% 38%,95% 38%,68% 60%,78% 95%,50% 72%,22% 95%,32% 60%,5% 38%,38% 38%)}
+/* The brand mark — renders the actual LuckPot icon. Used in the header logo and
+   the sign-in hero. (Spinners use .ball.spin below, which shows a ring instead
+   so a whole rotating icon doesn't look odd.) */
+.ball{width:30px;height:30px;border-radius:8px;flex:none;
+  background:#0a0f1d url("/icon.svg?v=61") center/cover no-repeat;
+  box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.ball.spin{background:none;border-radius:50%;border:3px solid rgba(255,200,61,.25);
+  border-top-color:var(--gold);box-shadow:none}
 .live{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
   background:rgba(47,226,138,.12);color:var(--grn);padding:5px 10px;border-radius:99px;border:1px solid rgba(47,226,138,.3)}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--grn);animation:pulse 1.4s infinite}
@@ -200,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v59 · luckpot-icon";
+const BUILD = "v61 · inapp-logo";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -771,7 +776,7 @@ function vLeagues(s){
   const restoring = auth && !LIVE;
   if(restoring){
     s.innerHTML=`<div class="fade" style="padding-top:60px;text-align:center">
-      <div class="ball" style="width:46px;height:46px;margin:0 auto 16px;animation:spin 1.2s linear infinite"></div>
+      <div class="ball spin" style="width:46px;height:46px;margin:0 auto 16px;animation:spin 1.2s linear infinite"></div>
       <div class="mut" style="font-size:14px">Loading your leagues…</div></div>`;
     return;
   }
@@ -2581,7 +2586,7 @@ function showWaking(show,attempt){
       document.body.appendChild(el);
     }
     el.innerHTML=`<div style="max-width:300px">
-      <div class="ball" style="width:54px;height:54px;margin:0 auto 18px;animation:spin 1.2s linear infinite"></div>
+      <div class="ball spin" style="width:54px;height:54px;margin:0 auto 18px;animation:spin 1.2s linear infinite"></div>
       <div style="font-family:'Anton';font-size:22px;letter-spacing:.5px">WAKING UP THE SERVER</div>
       <p style="color:#aeb9d6;font-size:13px;margin-top:8px">The free server naps when idle. This first request takes up to a minute — hang tight…${attempt?`<br><span style="opacity:.6">attempt ${attempt}</span>`:''}</p>
     </div>`;
