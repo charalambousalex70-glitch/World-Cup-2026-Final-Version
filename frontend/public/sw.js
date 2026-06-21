@@ -1,9 +1,9 @@
-/* SweepStake Live service worker (v3 — network-first for the app shell).
+/* LuckPot service worker (v3 — network-first for the app shell).
  * KEY FIX: index.html and the app are fetched network-first, so a new deploy
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
  */
-const CACHE = "sweepstake-v57";
+const CACHE = "luckpot-v58";
 
 self.addEventListener("install", () => self.skipWaiting());
 

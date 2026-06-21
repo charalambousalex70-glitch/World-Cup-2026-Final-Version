@@ -1,6 +1,6 @@
 {
-  "name": "SweepStake Live",
-  "short_name": "SweepStake",
+  "name": "LuckPot",
+  "short_name": "LuckPot",
   "description": "Real-time football sweepstakes for your crew.",
   "start_url": "/",
   "display": "standalone",
