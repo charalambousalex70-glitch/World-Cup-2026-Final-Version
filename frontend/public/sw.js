@@ -3,7 +3,7 @@
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
  */
-const CACHE = "luckpot-v62";
+const CACHE = "luckpot-v63";
 
 self.addEventListener("install", () => self.skipWaiting());
 

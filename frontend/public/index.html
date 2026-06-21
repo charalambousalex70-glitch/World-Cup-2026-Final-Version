@@ -205,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v62 · inline-logo";
+const BUILD = "v63 · scoring-progress-2026";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -229,6 +229,30 @@ const players=[
 // allocation: player index -> team index, + stage points
 let alloc=[0,1,2,3,4,5,6,7,8,9]; // teams index per player
 const stagePts={'Group':10,'R16':25,'QF':45,'SF':70,'Final':90,'Winner':120,'Out':0};
+/* World Cup 2026 structure — single source of truth for the progress bar.
+   Mirrors backend app/services/tournament.py. Phases in order with cumulative
+   match thresholds (Groups 1-72, R32 73-88, R16 89-96, QF 97-100, SF 101-102,
+   Final 103-104; 104 total). */
+const TOURNAMENT={
+  total:104,
+  phases:[
+    {key:'Group',label:'Groups',upto:72},
+    {key:'R32',  label:'R32',   upto:88},
+    {key:'R16',  label:'R16',   upto:96},
+    {key:'QF',   label:'QF',    upto:100},
+    {key:'SF',   label:'SF',    upto:102},
+    {key:'Final',label:'Final', upto:104},
+  ],
+};
+// Which phase index a given (1-based) match number falls in.
+function phaseIdxForMatch(n){
+  for(let i=0;i<TOURNAMENT.phases.length;i++){ if(n<=TOURNAMENT.phases[i].upto) return i; }
+  return TOURNAMENT.phases.length-1;
+}
+// Human label for a team's status badge (matches backend STAGE_LABELS).
+const STAGE_LABEL={Group:'In Groups',R32:'Round of 32',R16:'Round of 16',QF:'Quarter-final',
+  SF:'Semi-final',Final:'In the Final','3rd':'3rd place','4th':'4th place',
+  Winner:'🏆 Champion','Runner-up':'Runner-up',Out:'Eliminated'};
 let stages=['Winner','SF','Final','QF','Out','QF','R16','Out','R16','SF'];
 let PTS=[];  // backend-computed points per player (incl. group-position bonus)
 /* Payment state is keyed by STABLE participant id — never by array index or row
@@ -526,7 +550,8 @@ function liveUpdate(){
     const act=document.getElementById('home-activity');
     if(act){const h=activityHTML();if(act.getAttribute('data-html')!==h){act.innerHTML=h;act.setAttribute('data-html',h);UPDATED_COUNT++;}}
     const ta=document.getElementById('home-alive');
-    if(ta){const v=String(Array.isArray(stages)?stages.filter(s=>s&&s!=='Out').length:players.length);
+    if(ta){const TERM=new Set(['Out','3rd','4th','Runner-up','Winner']);
+      const v=String(Array.isArray(stages)?stages.filter(s=>s&&!TERM.has(s)).length:players.length);
       if(ta.textContent!==v){ta.textContent=v;UPDATED_COUNT++;}}
   }
   else if(view==='fixtures'){
@@ -1101,35 +1126,33 @@ function vHome(s){
 
   // ---- Real stats derived from the players' teams + live fixtures ----
   const drawDone = alloc.length>0 && teams.length>0;
-  // Teams alive = players whose team has NOT been eliminated ("Out").
+  // Teams alive = players whose team is still competing. Terminal stages
+  // (eliminated, or finished as 3rd/4th/Runner-up/Winner) no longer count as "in".
   // Before the draw, everyone's still "in", so it equals the player count.
+  const TERMINAL=new Set(['Out','3rd','4th','Runner-up','Winner']);
   const teamsAlive = drawDone
-    ? players.reduce((n,_,i)=> n + (stages[i]!=='Out' ? 1 : 0), 0)
+    ? players.reduce((n,_,i)=> n + (!TERMINAL.has(stages[i]) ? 1 : 0), 0)
     : players.length;
   const totalTeams = players.length; // started with N teams (one per player)
   // Matches played = finished + live fixtures from the backend.
   const matchesPlayed = Array.isArray(LIVE_FIXTURES)
     ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED'||x.status==='LIVE').length : 0;
   // Tournament progress = finished games out of the full 104-match schedule.
-  const TOTAL_GAMES=104;
+  const TOTAL_GAMES=TOURNAMENT.total;
   const gamesFinished = Array.isArray(LIVE_FIXTURES)
     ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED').length : 0;
   const prog = Math.round(gamesFinished/TOTAL_GAMES*100);
-  // Stage tracker (which round we're in) still uses team stages, for the labels.
-  const stageOrder=['Group','R16','QF','SF','Final','Winner'];
-  let furthest='Group';
-  if(drawDone){
-    stages.forEach(st=>{ if(st&&st!=='Out'&&stageOrder.indexOf(st)>stageOrder.indexOf(furthest))furthest=st; });
-  }
-  const stageLabels=['Groups','R16','QF','SF','Final'];
-  const curStageLabelIdx=Math.min(stageOrder.indexOf(furthest),4);
+  // Active phase is driven by how many matches have been played (per the 2026
+  // thresholds) — not by team stages — so the bar advances even before draws.
+  const stageLabels = TOURNAMENT.phases.map(p=>p.label);   // Groups | R32 | R16 | QF | SF | Final
+  const curStageLabelIdx = gamesFinished>0 ? phaseIdxForMatch(Math.min(gamesFinished, TOTAL_GAMES)) : 0;
 
   // "Your Team" card: show real team if drawn, else a friendly pre-draw card.
   const teamCard = meTeam
     ? `<div class="card glow">
         <div class="between" style="margin-bottom:6px">
           <div class="label">Your Team</div>
-          <span class="tag ${myStage==='Out'?'out':(myStage==='Winner'?'win':'live')}">${myStage||'—'}</span>
+          <span class="tag ${myStage==='Out'||myStage==='4th'?'out':(myStage==='Winner'?'win':'live')}">${STAGE_LABEL[myStage]||myStage||'—'}</span>
         </div>
         <div class="row">
           <div class="flag">${flagImg(meTeam.n,26)}</div>
