@@ -48,16 +48,8 @@ async def _rate_gate():
                 await _asyncio.sleep(wait)
         _CALL_TIMES.append(_time.monotonic())
 
-# Map football-data.org stage labels to our compact stage codes.
-STAGE_MAP = {
-    "GROUP_STAGE": "Group",
-    "LAST_16": "R16",
-    "QUARTER_FINALS": "QF",
-    "SEMI_FINALS": "SF",
-    "FINAL": "Final",
-    "3RD_PLACE": "Final",
-}
-STAGE_ORDER = ["Group", "R16", "QF", "SF", "Final", "Winner"]
+# Stage structure now lives in one place: app.services.tournament.
+from app.services.tournament import STAGE_MAP, STAGE_ORDER
 
 # The football API uses slightly different country names than our ranked list.
 # Normalise API names → our names so team-stage derivation matches correctly.
@@ -378,18 +370,20 @@ async def _recompute_team_stages(db: AsyncSession, sweepstake: Sweepstake) -> No
         t.eliminated = False
 
     for fx in all_fx:
-        rnd = fx.stage  # Group | R16 | QF | SF | Final
+        rnd = fx.stage  # Group | R32 | R16 | QF | SF | Final | 3rd_playoff
         if rnd == "Group":
             continue
-        for side in (fx.home_team, fx.away_team):
-            t = by_name.get(side)
-            if not t:
-                continue
-            try:
-                if STAGE_ORDER.index(rnd) > STAGE_ORDER.index(t.stage):
-                    t.stage = rnd
-            except ValueError:
-                pass
+        # The 3rd-place play-off doesn't sit on the main ladder; handle it below.
+        if rnd != "3rd_playoff":
+            for side in (fx.home_team, fx.away_team):
+                t = by_name.get(side)
+                if not t:
+                    continue
+                try:
+                    if STAGE_ORDER.index(rnd) > STAGE_ORDER.index(t.stage):
+                        t.stage = rnd
+                except ValueError:
+                    pass
 
         # Apply finished knockout results: winner advances, loser is out here.
         if fx.status == "FINISHED" and fx.home_score is not None and fx.away_score is not None:
@@ -412,11 +406,20 @@ async def _recompute_team_stages(db: AsyncSession, sweepstake: Sweepstake) -> No
             if winner:
                 loser = fx.away_team if winner == fx.home_team else fx.home_team
                 w, l = by_name.get(winner), by_name.get(loser)
-                if w:
-                    _advance(w, rnd)        # into the next round (or Winner)
-                if l:
-                    l.stage = rnd           # eliminated at the round they lost
-                    l.eliminated = True
+                if rnd == "3rd_playoff":
+                    # Decides 3rd (winner) vs 4th (loser); both are eliminated.
+                    if w: w.stage = "3rd"; w.eliminated = True
+                    if l: l.stage = "4th"; l.eliminated = True
+                elif rnd == "Final":
+                    # Champion vs Runner-up.
+                    if w: w.stage = "Winner"; w.eliminated = False
+                    if l: l.stage = "Runner-up"; l.eliminated = True
+                else:
+                    if w:
+                        _advance(w, rnd)        # into the next round
+                    if l:
+                        l.stage = rnd           # eliminated at the round they lost
+                        l.eliminated = True
     await db.flush()
 
 
