@@ -32,6 +32,25 @@ class Settings(BaseSettings):
     # in the environment only if you want the demo data for testing.
     AUTO_SEED: bool = False
 
+    # --- Email sending (OPTIONAL) ------------------------------------------
+    # No provider is configured by default. To enable real sending of the admin
+    # "League Update" emails, set these in the environment (e.g. on Render).
+    # Until all required fields are present, the feature runs in DRY-RUN mode:
+    # it generates and logs every email and reports what WOULD be sent, but
+    # dispatches nothing. This is deliberate — we never guess a provider/key.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""      # e.g. "LuckPot <updates@yourdomain.com>"
+    SMTP_USE_TLS: bool = True
+
+    @property
+    def email_configured(self) -> bool:
+        """True only when enough is set to actually send mail."""
+        return bool(self.SMTP_HOST and self.SMTP_USER
+                    and self.SMTP_PASSWORD and self.SMTP_FROM_EMAIL)
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

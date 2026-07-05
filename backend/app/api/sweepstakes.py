@@ -333,6 +333,70 @@ async def fixtures(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     return rows
 
 
+# ---------------- COMMUNICATIONS: admin league-update emails ----------------
+async def _load_sweep_fixtures(db: AsyncSession, sid: uuid.UUID):
+    return (await db.execute(
+        select(Fixture).where(Fixture.sweepstake_id == sid).order_by(Fixture.kickoff)
+    )).scalars().all()
+
+
+@router.get("/{sid}/update-email/preview")
+async def update_email_preview(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                               user: User = Depends(get_current_user)):
+    """Return the HTML that WOULD be emailed to the requesting admin, so they can
+    review it before sending. Also reports whether email sending is configured
+    and when the last blast went out."""
+    from app.services.email import compute_shared_context, build_update_email
+    from app.core.config import settings as _settings
+    sweep = await _load_full(db, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+    fixtures = await _load_sweep_fixtures(db, sid)
+    shared = compute_shared_context(sweep, fixtures)
+    # Preview from the admin's own participant record if they're in the league,
+    # else the first participant, so the preview is realistic and personalized.
+    me = next((p for p in sweep.participants if p.user_id == user.id), None)
+    sample = me or (sweep.participants[0] if sweep.participants else None)
+    if not sample:
+        raise HTTPException(400, "No players to preview for yet")
+    subject, body = build_update_email(sweep, sample, shared)
+    return {
+        "subject": subject,
+        "html": body,
+        "recipient_count": len(sweep.participants),
+        "email_configured": _settings.email_configured,
+        "last_update_sent": sweep.last_update_sent.isoformat() if sweep.last_update_sent else None,
+        "preview_for": sample.user.username,
+    }
+
+
+@router.post("/{sid}/update-email/send")
+async def update_email_send(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                            user: User = Depends(get_current_user)):
+    """Generate + send a personalized league-update email to every player.
+
+    If SMTP isn't configured this runs in dry-run mode (builds + logs every
+    email, sends nothing) and says so in the response. Each send attempt is
+    logged per recipient. Updates last_update_sent on a real send."""
+    from app.services.email import send_update_emails
+    from datetime import datetime, timezone
+    sweep = await _load_full(db, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+    fixtures = await _load_sweep_fixtures(db, sid)
+    summary = await send_update_emails(sweep, fixtures)
+    # Only stamp last_update_sent when we actually dispatched mail.
+    if not summary["dry_run"] and summary["sent"] > 0:
+        sweep.last_update_sent = datetime.now(timezone.utc)
+        await db.flush()
+        summary["last_update_sent"] = sweep.last_update_sent.isoformat()
+    else:
+        summary["last_update_sent"] = sweep.last_update_sent.isoformat() if sweep.last_update_sent else None
+    return summary
+
+
 @router.post("/{sid}/sync", response_model=list[FixtureOut])
 async def sync_now(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
                    user: User = Depends(get_current_user)):

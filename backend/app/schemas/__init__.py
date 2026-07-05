@@ -98,6 +98,7 @@ class SweepstakeOut(BaseModel):
     pay_bic: str | None = None
     pay_sort_code: str | None = None
     pay_account: str | None = None
+    last_update_sent: datetime | None = None
     participants: list[ParticipantOut] = []
     prize_tiers: list[PrizeTierOut] = []
 

@@ -205,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v64 · stage-aware-progress";
+const BUILD = "v65 · update-email";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -783,6 +783,63 @@ window.adminGetResetCode=async()=>{
         <button class="btn ghost" style="margin-top:14px" onclick="document.querySelector('.modal').remove()">Done</button>`);
     }
   }catch(e){ toast('Could not get code: '+(e.message||'error'),'⚠️'); }
+};
+/* --- Communications: League Update email --- */
+function _relTime(iso){
+  if(!iso)return null;
+  const d=new Date(iso); if(isNaN(d))return null;
+  const s=Math.floor((Date.now()-d.getTime())/1000);
+  if(s<60)return 'just now';
+  const m=Math.floor(s/60); if(m<60)return `${m} min${m>1?'s':''} ago`;
+  const h=Math.floor(m/60); if(h<24)return `${h} hour${h>1?'s':''} ago`;
+  const dy=Math.floor(h/24); if(dy<30)return `${dy} day${dy>1?'s':''} ago`;
+  return d.toLocaleDateString([],{day:'numeric',month:'short'});
+}
+function _lastUpdateLine(){
+  const t=CUR_SWEEP&&CUR_SWEEP.last_update_sent;
+  const rel=_relTime(t);
+  return rel?`Last sent: ${rel}`:'No update email sent yet.';
+}
+window.openUpdateEmailPreview=async()=>{
+  const btn=$('#send-update-btn'); if(btn){btn.textContent='Preparing preview…';btn.style.opacity=.7;}
+  try{
+    const r=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/update-email/preview`);
+    if(btn){btn.textContent='✉️ Send League Update Email';btn.style.opacity=1;}
+    const notConfigured = !r.email_configured;
+    modal(`<h2 style="font-size:20px;margin-bottom:4px">Preview update email</h2>
+      <p class="meta" style="font-size:12px;margin-bottom:12px">This will be personalized and sent to <b>${r.recipient_count}</b> player${r.recipient_count===1?'':'s'}. Preview shown for <b>${String(r.preview_for||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</b>.</p>
+      ${notConfigured?`<div class="card" style="border-color:rgba(255,200,61,.4);background:rgba(255,200,61,.08);font-size:12.5px;margin-bottom:12px;line-height:1.5">⚠️ <b>Email sending isn't set up yet.</b> No mail server is configured, so pressing send will run a <b>safe test (dry-run)</b>: every email is generated and logged, but nothing is actually delivered. To send for real, add SMTP details to the server environment.</div>`:''}
+      <div style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:12px;margin-bottom:14px">${r.html}</div>
+      <button class="btn gold" id="confirm-send" onclick="sendUpdateEmail()">${notConfigured?'Run test send (dry-run)':`Send to all ${r.recipient_count} players`}</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="document.querySelector('.modal').remove()">Cancel</button>`);
+  }catch(e){
+    if(btn){btn.textContent='✉️ Send League Update Email';btn.style.opacity=1;}
+    toast('Could not build preview: '+(e.message||'error'),'⚠️');
+  }
+};
+window.sendUpdateEmail=async()=>{
+  const cb=$('#confirm-send'); if(cb){cb.textContent='Sending…';cb.style.opacity=.7;cb.disabled=true;}
+  try{
+    const r=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/update-email/send`,{method:'POST'});
+    const m=document.querySelector('.modal'); if(m)m.remove();
+    if(r.dry_run){
+      toast(`Test complete — ${r.generated} email${r.generated===1?'':'s'} generated (not sent; email not set up)`,'🧪');
+    }else{
+      toast(`Update sent to ${r.sent} player${r.sent===1?'':'s'}${r.failed?` · ${r.failed} failed`:''}`,'✅');
+      if(CUR_SWEEP&&r.last_update_sent)CUR_SWEEP.last_update_sent=r.last_update_sent;
+    }
+    const line=$('#last-update-line'); if(line)line.textContent=_lastUpdateLine();
+    // Surface any per-recipient failures so the admin can act.
+    if(r.failed){
+      const fails=(r.log||[]).filter(x=>!x.ok).map(x=>`${x.recipient}: ${x.detail}`).slice(0,10).join('<br>');
+      if(fails)modal(`<h2 style="font-size:18px;margin-bottom:8px">Some emails didn't send</h2>
+        <div class="card flat" style="font-size:12px;line-height:1.6">${fails}</div>
+        <button class="btn ghost" style="margin-top:12px" onclick="document.querySelector('.modal').remove()">Close</button>`);
+    }
+  }catch(e){
+    if(cb){cb.textContent='Send';cb.style.opacity=1;cb.disabled=false;}
+    toast('Send failed: '+(e.message||'error'),'⚠️');
+  }
 };
 window.submitAuth=()=>{
   // Trust the visibly-active tab, not just the variable, so they can't desync.
@@ -2161,6 +2218,10 @@ function vAdmin(s){
       <button class="btn" onclick="openInvite()">🔗 Invite Link</button>
     </div>
     <button class="btn" onclick="adminGetResetCode()">🔑 Get a player's reset code</button>
+
+    <div class="label" style="margin-top:2px">📣 Communications</div>
+    <button class="btn gold" id="send-update-btn" onclick="openUpdateEmailPreview()">✉️ Send League Update Email</button>
+    <div class="meta" style="font-size:11px;margin-top:-4px" id="last-update-line">${_lastUpdateLine()}</div>
 
     <div class="between" style="margin-top:4px"><div class="label">👥 Players & Payment</div>
       <span class="meta" style="font-size:12px">${players.filter(p=>_paidFor(p.id)).length}/${players.length} paid${PAID_DRAFT?' · <span class="gold">unsaved</span>':(PAID_SAVED_AT?' · saved '+_timeShort(PAID_SAVED_AT):'')}</span></div>

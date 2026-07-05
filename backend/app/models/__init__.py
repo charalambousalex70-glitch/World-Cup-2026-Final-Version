@@ -78,6 +78,8 @@ class Sweepstake(Base):
     pay_bic: Mapped[str | None] = mapped_column(String(20))
     pay_sort_code: Mapped[str | None] = mapped_column(String(20))
     pay_account: Mapped[str | None] = mapped_column(String(40))
+    # When the admin last sent a "League Update" email blast (for the helper line).
+    last_update_sent: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
