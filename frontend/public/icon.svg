@@ -1,0 +1,30 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="nv" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16223f"/><stop offset="1" stop-color="#0a0f1d"/>
+    </linearGradient>
+    <linearGradient id="gd" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd866"/><stop offset="0.5" stop-color="#ffc83d"/><stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+    <radialGradient id="gl" cx="0.5" cy="0.30" r="0.7">
+      <stop offset="0" stop-color="#ffe08a" stop-opacity="0.28"/><stop offset="1" stop-color="#ffe08a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#nv)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#gl)"/>
+  <!-- football resting in the pot mouth -->
+  <circle cx="512" cy="430" r="152" fill="#ffffff"/>
+  <path d="M512 348 l46 33 -18 55 h-56 l-18 -55 z" fill="#11161f"/>
+  <path d="M466 381 l46 33 46 -33" fill="none" stroke="#11161f" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M454 466 l-42 18 M570 466 l42 18 M512 498 v44" stroke="#11161f" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="512" cy="430" r="152" fill="none" stroke="#11161f" stroke-width="14" opacity="0.10"/>
+  <!-- pot: body, rim, handles, little feet -->
+  <circle cx="300" cy="612" r="46" fill="none" stroke="url(#gd)" stroke-width="36"/>
+  <circle cx="724" cy="612" r="46" fill="none" stroke="url(#gd)" stroke-width="36"/>
+  <path d="M300 470 q-50 0 -50 32 q0 20 34 24 q-12 156 64 236 q44 36 164 36 t164 -36 q76 -80 64 -236 q34 -4 34 -24 q0 -32 -50 -32 z" fill="url(#gd)"/>
+  <path d="M300 470 q-50 0 -50 32 q0 20 34 24 l456 0 q34 -4 34 -24 q0 -32 -50 -32 z" fill="#ffe7a6"/>
+  <ellipse cx="512" cy="498" rx="220" ry="30" fill="#d9831a" opacity="0.45"/>
+  <!-- feet -->
+  <rect x="396" y="852" width="34" height="40" rx="12" fill="url(#gd)" transform="rotate(18 413 872)"/>
+  <rect x="594" y="852" width="34" height="40" rx="12" fill="url(#gd)" transform="rotate(-18 611 872)"/>
+</svg>

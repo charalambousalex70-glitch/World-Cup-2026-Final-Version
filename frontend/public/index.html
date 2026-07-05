@@ -205,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v63 · scoring-progress-2026";
+const BUILD = "v64 · stage-aware-progress";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -229,24 +229,100 @@ const players=[
 // allocation: player index -> team index, + stage points
 let alloc=[0,1,2,3,4,5,6,7,8,9]; // teams index per player
 const stagePts={'Group':10,'R16':25,'QF':45,'SF':70,'Final':90,'Winner':120,'Out':0};
-/* World Cup 2026 structure — single source of truth for the progress bar.
-   Mirrors backend app/services/tournament.py. Phases in order with cumulative
-   match thresholds (Groups 1-72, R32 73-88, R16 89-96, QF 97-100, SF 101-102,
-   Final 103-104; 104 total). */
+/* World Cup 2026 progress — single source of truth.
+   Stage order (each with its own equal-width bar segment):
+     Groups → R32 → R16 → QF → SF → 3rd Place → Final
+   Match counts: 72 · 16 · 8 · 4 · 2 · 1 · 1  = 104 total. */
 const TOURNAMENT={
   total:104,
   phases:[
-    {key:'Group',label:'Groups',upto:72},
-    {key:'R32',  label:'R32',   upto:88},
-    {key:'R16',  label:'R16',   upto:96},
-    {key:'QF',   label:'QF',    upto:100},
-    {key:'SF',   label:'SF',    upto:102},
-    {key:'Final',label:'Final', upto:104},
+    {key:'Group',label:'Groups',  matches:72},
+    {key:'R32',  label:'R32',     matches:16},
+    {key:'R16',  label:'R16',     matches:8},
+    {key:'QF',   label:'QF',      matches:4},
+    {key:'SF',   label:'SF',      matches:2},
+    {key:'3rd',  label:'3rd Place',matches:1},
+    {key:'Final',label:'Final',   matches:1},
   ],
 };
-// Which phase index a given (1-based) match number falls in.
+/* Classify a fixture into a phase key from REAL match data.
+   The feed marks the 3rd-place play-off with its own stage ('3rd_playoff' via
+   backend STAGE_MAP); as a fallback we also detect it structurally: a 'Final'-
+   stage match whose two teams are the SF LOSERS is the 3rd-place match. */
+function _fxPhase(fx, sfLosers){
+  const st=fx.stage||'Group';
+  if(st==='3rd_playoff') return '3rd';
+  if(st==='Final'&&sfLosers&&sfLosers.size===2
+     &&sfLosers.has(fx.home_team)&&sfLosers.has(fx.away_team)) return '3rd';
+  if(TOURNAMENT.phases.some(p=>p.key===st)) return st;
+  return 'Group';
+}
+/* THE single helper: everything the progress UI needs, computed from matches.
+   - activeStage advances only when EVERY match in the current stage is done
+   - barPosition is stageStart + segmentWidth * (done/total), clamped strictly
+     below the next marker until the stage is 100% complete
+   Robust to matches arriving out of order or incomplete: we count what exists,
+   and a stage with no known fixtures yet simply reports 0/expected. */
+function getTournamentProgress(matches){
+  const fx=Array.isArray(matches)?matches:[];
+  // SF losers (for structural 3rd-place detection), honouring penalty winners.
+  const sfLosers=new Set();
+  fx.forEach(m=>{
+    if((m.stage||'')!=='SF'||m.status!=='FINISHED')return;
+    let loser=null;
+    if(m.home_score>m.away_score)loser=m.away_team;
+    else if(m.away_score>m.home_score)loser=m.home_team;
+    else{try{const w=(JSON.parse(m.detail||'{}')||{}).winner;
+      if(w==='HOME_TEAM')loser=m.away_team; else if(w==='AWAY_TEAM')loser=m.home_team;}catch(e){}}
+    if(loser)sfLosers.add(loser);
+  });
+  // Count completed matches per phase from real data.
+  const done={}, seen={};
+  TOURNAMENT.phases.forEach(p=>{done[p.key]=0;seen[p.key]=0;});
+  fx.forEach(m=>{
+    const k=_fxPhase(m,sfLosers);
+    seen[k]=(seen[k]||0)+1;
+    if(m.status==='FINISHED')done[k]=(done[k]||0)+1;
+  });
+  // Active stage = first phase (in order) whose completed count is below its
+  // expected total. All earlier phases are 'done'; later ones 'upcoming'.
+  const n=TOURNAMENT.phases.length;
+  const segW=100/n;                       // equal-width segments
+  let activeIdx=n-1;
+  for(let i=0;i<n;i++){
+    const p=TOURNAMENT.phases[i];
+    if((done[p.key]||0) < p.matches){ activeIdx=i; break; }
+  }
+  const active=TOURNAMENT.phases[activeIdx];
+  const inStageDone=Math.min(done[active.key]||0, active.matches);
+  const segProgress=active.matches>0 ? inStageDone/active.matches : 0;
+  // Bar position: start of active segment + partial fill. Clamp strictly below
+  // the next marker (99.5% of the segment) unless the stage is fully complete.
+  const stageStart=activeIdx*segW;
+  let barPosition;
+  if(segProgress>=1){
+    barPosition=stageStart+segW;          // snap exactly onto the next marker
+  }else{
+    barPosition=Math.min(stageStart+segW*segProgress, stageStart+segW*0.995);
+  }
+  barPosition=Math.min(100,barPosition);
+  const stageStatuses=TOURNAMENT.phases.map((p,i)=>({
+    key:p.key,label:p.label,
+    status: i<activeIdx?'done':(i===activeIdx?'active':'upcoming'),
+  }));
+  const totalDone=Object.values(done).reduce((a,b)=>a+b,0);
+  return {
+    activeStage:active.key, activeLabel:active.label, currentStageIndex:activeIdx,
+    completedMatchesInStage:inStageDone, totalMatchesInStage:active.matches,
+    segmentProgress:segProgress, barPosition, stageStatuses,
+    totalMatchesDone:totalDone,
+  };
+}
+// Legacy helper kept for compatibility (Next Up banner etc. don't use it, but
+// avoid breaking anything that might).
 function phaseIdxForMatch(n){
-  for(let i=0;i<TOURNAMENT.phases.length;i++){ if(n<=TOURNAMENT.phases[i].upto) return i; }
+  let cum=0;
+  for(let i=0;i<TOURNAMENT.phases.length;i++){cum+=TOURNAMENT.phases[i].matches; if(n<=cum)return i;}
   return TOURNAMENT.phases.length-1;
 }
 // Human label for a team's status badge (matches backend STAGE_LABELS).
@@ -543,10 +619,15 @@ function liveUpdate(){
   }
   else if(view==='home'){
     const tp=document.getElementById('home-progress');
-    if(tp){const gf=Array.isArray(LIVE_FIXTURES)?LIVE_FIXTURES.filter(x=>x.status==='FINISHED').length:0;
-      const pr=Math.round(gf/104*100);const t=`${gf} / 104 · ${pr}%`;
-      if(tp.innerHTML!==t){tp.innerHTML=t;UPDATED_COUNT++;}
-      const bar=document.getElementById('home-progress-bar');if(bar&&bar.style.width!==pr+'%')bar.style.width=pr+'%';}
+    if(tp){const TP=getTournamentProgress(LIVE_FIXTURES);
+      const t=`${TP.activeLabel} · ${TP.completedMatchesInStage}/${TP.totalMatchesInStage}`;
+      if(tp.textContent!==t){tp.textContent=t;UPDATED_COUNT++;}
+      const bar=document.getElementById('home-progress-bar');
+      const w=TP.barPosition+'%';
+      if(bar&&bar.style.width!==w){bar.style.width=w;UPDATED_COUNT++;}
+      const lbls=document.getElementById('home-stage-labels');
+      if(lbls){const h=TP.stageStatuses.map(s=>`<span class="${s.status==='active'?'gold':''}" style="${s.status==='done'?'opacity:.55':''};${s.status==='active'?'font-weight:700':''}">${s.label}</span>`).join('');
+        if(lbls.getAttribute('data-html')!==h){lbls.innerHTML=h;lbls.setAttribute('data-html',h);UPDATED_COUNT++;}}}
     const act=document.getElementById('home-activity');
     if(act){const h=activityHTML();if(act.getAttribute('data-html')!==h){act.innerHTML=h;act.setAttribute('data-html',h);UPDATED_COUNT++;}}
     const ta=document.getElementById('home-alive');
@@ -1137,15 +1218,11 @@ function vHome(s){
   // Matches played = finished + live fixtures from the backend.
   const matchesPlayed = Array.isArray(LIVE_FIXTURES)
     ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED'||x.status==='LIVE').length : 0;
-  // Tournament progress = finished games out of the full 104-match schedule.
-  const TOTAL_GAMES=TOURNAMENT.total;
-  const gamesFinished = Array.isArray(LIVE_FIXTURES)
-    ? LIVE_FIXTURES.filter(x=>x.status==='FINISHED').length : 0;
-  const prog = Math.round(gamesFinished/TOTAL_GAMES*100);
-  // Active phase is driven by how many matches have been played (per the 2026
-  // thresholds) — not by team stages — so the bar advances even before draws.
-  const stageLabels = TOURNAMENT.phases.map(p=>p.label);   // Groups | R32 | R16 | QF | SF | Final
-  const curStageLabelIdx = gamesFinished>0 ? phaseIdxForMatch(Math.min(gamesFinished, TOTAL_GAMES)) : 0;
+  // Tournament progress — everything comes from the single helper; the
+  // rendering code does no position math of its own.
+  const TP = getTournamentProgress(LIVE_FIXTURES);
+  const gamesFinished = TP.totalMatchesDone;
+  const TOTAL_GAMES = TOURNAMENT.total;
 
   // "Your Team" card: show real team if drawn, else a friendly pre-draw card.
   const teamCard = meTeam
@@ -1199,9 +1276,9 @@ function vHome(s){
 
     ${todayDigestHTML()}
     <div class="card">
-      <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700" id="home-progress">${gamesFinished} / ${TOTAL_GAMES} · ${prog}%</span></div>
-      <div class="bar"><i id="home-progress-bar" style="width:${prog}%"></i></div>
-      <div class="between mut" style="font-size:11px;margin-top:8px">${stageLabels.map((l,i)=>`<span class="${i===curStageLabelIdx&&drawDone?'gold':''}">${l}</span>`).join('')}</div>
+      <div class="between" style="margin-bottom:10px"><div class="label">Tournament Progress</div><span class="gold mono" style="font-weight:700" id="home-progress">${TP.activeLabel} · ${TP.completedMatchesInStage}/${TP.totalMatchesInStage}</span></div>
+      <div class="bar"><i id="home-progress-bar" style="width:${TP.barPosition}%;transition:width .8s cubic-bezier(.2,.8,.2,1)"></i></div>
+      <div class="between mut" style="font-size:11px;margin-top:8px" id="home-stage-labels">${TP.stageStatuses.map(s=>`<span class="${s.status==='active'?'gold':(s.status==='done'?'':'')}" style="${s.status==='done'?'opacity:.55':''};${s.status==='active'?'font-weight:700':''}">${s.label}</span>`).join('')}</div>
     </div>
 
     <div class="grid2">
