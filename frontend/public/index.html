@@ -205,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v66 · smooth-fixes";
+const BUILD = "v67 · board-stage-fix";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -228,7 +228,7 @@ const players=[
 ];
 // allocation: player index -> team index, + stage points
 let alloc=[0,1,2,3,4,5,6,7,8,9]; // teams index per player
-const stagePts={'Group':10,'R16':25,'QF':45,'SF':70,'Final':90,'Winner':120,'Out':0};
+const stagePts={'Group':10,'R32':18,'R16':25,'QF':45,'SF':70,'Final':90,'4th':95,'3rd':100,'Runner-up':110,'Winner':120,'Out':0};
 /* World Cup 2026 progress — single source of truth.
    Stage order (each with its own equal-width bar segment):
      Groups → R32 → R16 → QF → SF → 3rd Place → Final
@@ -494,7 +494,7 @@ function ranked(){
   // knockout stage points). Fall back to the flat stage lookup only when no
   // backend value is present (e.g. demo mode before a live connection).
   return players.map((p,i)=>({p,ti:alloc[i],stage:stages[i],
-      pts:(PTS[i]!=null?PTS[i]:stagePts[stages[i]]),idx:i}))
+      pts:(PTS[i]!=null?PTS[i]:(stagePts[stages[i]]??0)),idx:i}))   // ??0: never NaN
     .sort((a,b)=>b.pts-a.pts||a.idx-b.idx);
 }
 function toast(msg,icon='🔔'){
@@ -632,7 +632,9 @@ function liveUpdate(){
     if(act){const h=activityHTML();if(act.getAttribute('data-html')!==h){act.innerHTML=h;act.setAttribute('data-html',h);UPDATED_COUNT++;}}
     const ta=document.getElementById('home-alive');
     if(ta){const TERM=new Set(['Out','3rd','4th','Runner-up','Winner']);
-      const v=String(Array.isArray(stages)?stages.filter(s=>s&&!TERM.has(s)).length:players.length);
+      const v=String(Array.isArray(stages)
+        ? players.reduce((n,p,i)=>n+((p.elim||TERM.has(stages[i]))?0:1),0)
+        : players.length);
       if(ta.textContent!==v){ta.textContent=v;UPDATED_COUNT++;}}
   }
   else if(view==='fixtures'){
@@ -1267,9 +1269,9 @@ function vHome(s){
   // Teams alive = players whose team is still competing. Terminal stages
   // (eliminated, or finished as 3rd/4th/Runner-up/Winner) no longer count as "in".
   // Before the draw, everyone's still "in", so it equals the player count.
-  const TERMINAL=new Set(['Out','3rd','4th','Runner-up','Winner']);
+  const TERMINAL=new Set(['Out','3rd','4th','Runner-up']);   // Winner isn't "out", but their run IS over
   const teamsAlive = drawDone
-    ? players.reduce((n,_,i)=> n + (!TERMINAL.has(stages[i]) ? 1 : 0), 0)
+    ? players.reduce((n,p,i)=> n + ((p.elim||TERMINAL.has(stages[i])||stages[i]==='Winner') ? 0 : 1), 0)
     : players.length;
   const totalTeams = players.length; // started with N teams (one per player)
   // Matches played = finished + live fixtures from the backend.
@@ -1458,15 +1460,21 @@ function badgesFor(x,i,r){
   if(x.ti!=null&&teams[x.ti]){
     const rank=(window.RANKED_POOL||[]).findIndex(t=>t.name===teams[x.ti].n)+1;
     if(rank===1)out.push(['🍀','Lucky draw — got the favourite']);
-    if(rank>=20&&x.stage&&x.stage!=='Out'&&x.stage!=='Group')out.push(['🦾','Giant Killer — underdog still alive']);
+    if(rank>=20&&x.stage&&x.stage!=='Out'&&x.stage!=='Group'&&!(x.p&&x.p.elim))out.push(['🦾','Giant Killer — underdog still alive']);
   }
   return out.map(([e,t])=>`<span title="${t}" style="font-size:13px">${e}</span>`).join('');
 }
 function lbRow(x,i,allRanked){
   const t=T(x.ti), me=x.p.name===(MY_NAME||'You');
   const badges=badgesFor(x,i,allRanked||[]);
-  const tag = x.stage==='Out'?'<span class="tag out">OUT</span>'
-    : x.stage==='Winner'?'<span class="tag win">WINNER</span>'
+  /* Stage tag semantics (backend sends the FURTHEST stage + eliminated flag):
+       Winner/Runner-up/3rd/4th → final placement; eliminated → OUT·<stage they
+       reached>; still competing past groups → blue stage code; groups → none. */
+  const FINISH={'Winner':['win','🏆 CHAMPION'],'Runner-up':['win','🥈 2ND'],
+                '3rd':['win','🥉 3RD'],'4th':['out','4TH']};
+  const elim=(x.p&&x.p.elim)||x.stage==='Out';
+  const tag = FINISH[x.stage]?`<span class="tag ${FINISH[x.stage][0]}">${FINISH[x.stage][1]}</span>`
+    : elim?`<span class="tag out">OUT${(x.stage&&x.stage!=='Group'&&x.stage!=='Out')?' · '+x.stage:''}</span>`
     : (x.stage&&x.stage!=='Group')?`<span class="tag live">${x.stage}</span>`
     : '';   // group stage / no draw → no tag clutter
   const pts = (x.pts!=null && !isNaN(x.pts)) ? x.pts : '–';
@@ -2807,9 +2815,10 @@ function applyLeaderboard(rows){
     if(ti<0){teams.push({n:row.team_name,e:row.flag_emoji,c:'#888'});ti=teams.length-1}
     players.push({id:row.participant_id,name:row.participant_name,
       av:row.participant_name.slice(0,2).toUpperCase(),col:row.avatar_color,
-      wins:row.wins,draws:row.draws,losses:row.losses});
+      wins:row.wins,draws:row.draws,losses:row.losses,
+      elim:!!row.eliminated});          // needed to tell "out at R16" from "in R16"
     alloc.push(ti); stages.push(row.stage);
-    PTS.push(row.points);   // authoritative points from the backend (results-based)
+    PTS.push(row.points);   // authoritative points from the backend (bonus + match)
   });
 }
 async function refreshLive(){
