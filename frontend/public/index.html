@@ -205,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v65 · update-email";
+const BUILD = "v66 · smooth-fixes";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -2762,19 +2762,25 @@ async function apiReq(path,{method='GET',body,auth=true,retries=4}={}){
   let lastErr;
   for(let attempt=1;attempt<=retries;attempt++){
     try{
-      // 70s timeout — long enough for a cold Render wake-up.
+      // 30s timeout — Render is on a paid (always-on) plan, so a request that
+      // hasn't answered in 30s is stuck; fail fast and let the retry logic run
+      // rather than pinning a spinner for over a minute.
       const ctrl=new AbortController();
-      const timer=setTimeout(()=>ctrl.abort(),70000);
-      const r=await fetch(`${API()}${path}`,{method,headers:h,
-        body:body?JSON.stringify(body):undefined,signal:ctrl.signal});
-      clearTimeout(timer);
-      showWaking(false);
-      if(!r.ok){
-        // Real HTTP error (4xx/5xx) — don't retry; surface it.
-        let m=r.statusText;try{m=(await r.json()).detail||m}catch{}
-        throw new Error(m);
+      const timer=setTimeout(()=>ctrl.abort(),30000);
+      let r;
+      try{
+        r=await fetch(`${API()}${path}`,{method,headers:h,
+          body:body?JSON.stringify(body):undefined,signal:ctrl.signal});
+        if(!r.ok){
+          // Real HTTP error (4xx/5xx) — don't retry; surface it.
+          let m=r.statusText;try{m=(await r.json()).detail||m}catch{}
+          throw new Error(m);
+        }
+        showWaking(false);
+        return r.status===204?null:await r.json();
+      }finally{
+        clearTimeout(timer);   // ALWAYS clear — error paths previously leaked it
       }
-      return r.status===204?null:r.json();
     }catch(e){
       lastErr=e;
       const networkish=/Failed to fetch|NetworkError|aborted|AbortError/i.test(e.message||e.name||'');
@@ -2845,8 +2851,9 @@ function scheduleNextPoll(){
   if(!LIVE||!SID)return;
   pollTimer=setTimeout(async()=>{
     try{
-      await refreshLive();          // leaderboard (also seeds climbs)
-      await loadFixtures();         // fixture statuses → moves finished out of Upcoming
+      // Fetch leaderboard + fixtures IN PARALLEL — they're independent reads,
+      // and doing them sequentially doubled the refresh latency on every tick.
+      await Promise.all([refreshLive(), loadFixtures()]);
       LAST_REFRESH_AT=new Date().toISOString();
       liveUpdate();                 // patch in place — no full re-render, no scroll jump
     }catch(e){/* keep polling regardless */}
@@ -2889,19 +2896,34 @@ window.checkFeed=async()=>{
 window.manualRefresh=async()=>{
   if(!LIVE||!SID){toast('Not connected to a league','🔧');return;}
   toast('Refreshing…','↻');
-  try{await refreshLive();await loadFixtures();await loadActivity();LAST_REFRESH_AT=new Date().toISOString();render();
+  try{await Promise.all([refreshLive(),loadFixtures(),loadActivity()]);LAST_REFRESH_AT=new Date().toISOString();render();
     toast('Up to date ✅','✅');}
   catch(e){toast('Refresh failed','⚠️');}
 };
 /* When the user returns to the app (unlocks phone, refocuses tab), the WS may
-   have dropped while backgrounded — refresh immediately so nothing is stale. */
-let _visBound=false;
+   have dropped while backgrounded — refresh immediately so nothing is stale.
+   One debounced handler covers both visibilitychange and focus (desktop fires
+   both within ms of each other), and it patches in place via liveUpdate() —
+   never a full render(), which would rebuild the DOM and jump the scroll. */
+let _visBound=false,_lastReturnRefresh=0;
+function _onReturn(){
+  if(!(LIVE&&SID))return;
+  const now=Date.now();
+  if(now-_lastReturnRefresh<1500)return;   // debounce focus+visibility double-fire
+  _lastReturnRefresh=now;
+  Promise.all([refreshLive(),loadFixtures()])
+    .then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();})
+    .catch(()=>{});
+  scheduleNextPoll();
+  // Also ask the service worker for a newer build — mobile suspends the hourly
+  // check while backgrounded, so returning is the moment to catch new deploys.
+  try{navigator.serviceWorker&&navigator.serviceWorker.getRegistration&&
+    navigator.serviceWorker.getRegistration().then(r=>r&&r.update());}catch(e){}
+}
 function bindVisibilityRefresh(){
   if(_visBound)return; _visBound=true;
-  document.addEventListener('visibilitychange',()=>{
-    if(!document.hidden && LIVE && SID){ refreshLive(); loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();}); scheduleNextPoll(); }
-  });
-  window.addEventListener('focus',()=>{ if(LIVE&&SID){loadFixtures().then(()=>render());} });
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden)_onReturn(); });
+  window.addEventListener('focus',_onReturn);
 }
 
 function startLive(sid){
@@ -2910,8 +2932,9 @@ function startLive(sid){
   bindVisibilityRefresh();
   const base=window.__API_URL__?window.__API_URL__.replace(/^http/,'ws')
     :`${location.protocol==='https:'?'wss':'ws'}://${location.host}`;
-  let alive=true,ws;
+  let alive=true,ws,pingIv=null,reconnectT=null;
   const open=()=>{
+    if(!alive)return;                       // league was closed during a retry window
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
       LAST_EVENT_AT=new Date().toISOString();
@@ -2936,12 +2959,19 @@ function startLive(sid){
         loadFixtures().then(()=>{refreshLive();loadActivity().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();});PRED_BOARD=null;});
       }
     }catch{}};
-    ws.onclose=()=>{WS_STATUS='reconnecting';if(alive)setTimeout(open,1500)};
-    ws.onopen=()=>{WS_STATUS='connected';setInterval(()=>{if(ws.readyState===1)ws.send('ping')},25000)};
+    ws.onclose=()=>{WS_STATUS='reconnecting';
+      if(pingIv){clearInterval(pingIv);pingIv=null;}      // stop pinging a dead socket
+      if(alive)reconnectT=setTimeout(open,1500)};
+    ws.onopen=()=>{WS_STATUS='connected';
+      if(pingIv)clearInterval(pingIv);                    // never stack ping timers
+      pingIv=setInterval(()=>{if(ws.readyState===1)ws.send('ping')},25000)};
   };
   open();
   scheduleNextPoll();   // start the timer-based fallback in parallel with the WS
-  wsClose=()=>{alive=false;WS_STATUS='offline';if(ws)ws.close();if(pollTimer)clearTimeout(pollTimer);};
+  wsClose=()=>{alive=false;WS_STATUS='offline';
+    if(pingIv){clearInterval(pingIv);pingIv=null;}
+    if(reconnectT){clearTimeout(reconnectT);reconnectT=null;}
+    if(ws)ws.close();if(pollTimer)clearTimeout(pollTimer);};
 }
 let HAS_SWEEPSTAKE=false; // true once a league is selected/open
 let MY_NAME=null;         // the logged-in user's username (to mark "you")
@@ -3018,9 +3048,7 @@ async function refreshSweepstake(){
   try{
     const s=await apiReq(`/sweepstakes/${CUR_SWEEP.id}`);
     applySweepstake(s);
-    await refreshLive();
-    await loadFixtures();
-    await loadActivity();
+    await Promise.all([refreshLive(), loadFixtures(), loadActivity()]);  // parallel
     render();
   }catch(e){console.warn('refreshSweepstake failed',e)}
 }
