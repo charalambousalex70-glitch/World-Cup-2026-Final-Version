@@ -51,17 +51,25 @@ STAGE_MAP = {
     "FINAL": "Final",
 }
 
-# Stage-finish bonus. Tournament achievement ALWAYS outranks raw match points:
-# the 30-point gap between bands exceeds the maximum match-points swing a team
-# can earn (a champion plays ~8 games → at most ~24 match points), so a higher
-# finish can never be overtaken by a lower finish on match points alone.
+# Stage bonus = the furthest stage a team has REACHED, scored as the minimum
+# finish that reaching it guarantees. This is what makes the ranking correct
+# DURING the tournament, not only after it:
+#   · reaching the SF guarantees at least 4th place        → 120
+#   · reaching the Final guarantees at least Runner-up     → 180
+# Without these two entries, teams still alive in the SF/Final scored a bonus
+# of 0 and ranked below R32 casualties (real bug, fixed here).
+# Tournament achievement ALWAYS outranks raw match points: every band gap is
+# ≥30, which exceeds the maximum ~24 match points a champion can accumulate,
+# so a higher finish can never be overtaken on match points alone.
 STAGE_BONUS = {
     "Group":     0,    # exited in the group stage
-    "R32":       30,   # reached/eliminated in the Round of 32
+    "R32":       30,   # reached the Round of 32
     "R16":       60,
     "QF":        90,
+    "SF":        120,  # reached the semi-finals (≥ 4th place guaranteed)
     "4th":       120,  # lost the 3rd-place play-off
     "3rd":       150,  # won the 3rd-place play-off
+    "Final":     180,  # reached the Final (≥ Runner-up guaranteed)
     "Runner-up": 180,  # lost the Final
     "Winner":    210,  # World Cup champion
 }
