@@ -50,14 +50,13 @@ async def lifespan(app: FastAPI):
             pass  # never block startup on a migration nicety
 
     # Auto-seed demo data on first boot so the app is usable immediately
-    # (no manual Shell step). Safe to run every boot: it no-ops if data exists.
+    # (no manual Shell step). Only seeds when the demo user is absent, so it
+    # never disturbs real user-created leagues or a populated database.
     if settings.AUTO_SEED:
         try:
             from app.models import User
             from app.seed import seed
             async with AsyncSessionLocal() as db:
-                # Check specifically for the demo user, not just any data, so a
-                # half-populated DB still gets the demo login created.
                 demo = (
                     await db.execute(
                         select(User.id).where(User.email == "you@example.com")
@@ -139,5 +138,5 @@ async def health():
     from app.services.football import FEED_HEALTH
     _k = settings.FOOTBALL_API_KEY or ""
     return {"status": "ok", "service": settings.PROJECT_NAME,
-            "build": "v69-stage-order-fix", "poller": POLLER_STATS, "feed": FEED_HEALTH,
+            "build": "v70-recompute-action", "poller": POLLER_STATS, "feed": FEED_HEALTH,
             "api_key_fingerprint": (f"{_k[:4]}…{_k[-4:]} (len {len(_k)})" if _k else "MISSING")}
