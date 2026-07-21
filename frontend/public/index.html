@@ -205,7 +205,7 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v69 · stage-order-fix";
+const BUILD = "v70 · recompute-action";
 const BUILD_TIME = "2026-06-13";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
@@ -773,6 +773,19 @@ window.resetConfirm=async()=>{
 /* Admin helper: from the Admin tab, fetch a pending reset code for a player so
    you can relay it. Surfaced as a button per unpaid/any player is overkill —
    instead expose a small "Get reset code" action by email. */
+/* Admin: force a clean rebuild of every team's stage + the leaderboard from the
+   fixtures on record. Use when a team looks stuck at the wrong stage. */
+window.recomputeStages=async()=>{
+  if(!LIVE){toast('Connect to the backend first','🔧');return;}
+  if(!(CUR_SWEEP&&CUR_SWEEP.admin_id===MY_ID)){toast('Admin only','🔒');return;}
+  toast('Rebuilding stages…','🔄');
+  try{
+    const r=await apiReq(`/sweepstakes/${CUR_SWEEP.id}/recompute-stages`,{method:'POST'});
+    await refreshSweepstake();     // pull fresh leaderboard/standings
+    render();
+    toast(`Stages rebuilt for ${r.teams?r.teams.length:0} teams`,'✅');
+  }catch(e){ toast('Could not rebuild: '+(e.message||'error'),'⚠️'); }
+};
 window.adminGetResetCode=async()=>{
   const email=prompt('Player email to get a reset code for:'); if(!email)return;
   try{
@@ -2226,6 +2239,7 @@ function vAdmin(s){
       <button class="btn" onclick="openInvite()">🔗 Invite Link</button>
     </div>
     <button class="btn" onclick="adminGetResetCode()">🔑 Get a player's reset code</button>
+    <button class="btn" onclick="recomputeStages()">🔄 Fix team stages / leaderboard</button>
 
     <div class="label" style="margin-top:2px">📣 Communications</div>
     <button class="btn gold" id="send-update-btn" onclick="openUpdateEmailPreview()">✉️ Send League Update Email</button>
