@@ -25,17 +25,28 @@ PLAYERS = [
     ("noah@x.com", "Noah", "#e2c84d"), ("emma@x.com", "Emma", "#5d7bff"),
 ]
 TEAMS = [
-    ("Brazil", "🇧🇷", "Winner"), ("France", "🇫🇷", "SF"), ("England", "🏴", "Final"),
-    ("Argentina", "🇦🇷", "QF"), ("Spain", "🇪🇸", "Out"), ("Germany", "🇩🇪", "QF"),
-    ("Portugal", "🇵🇹", "R16"), ("Netherlands", "🇳🇱", "Out"),
-    ("Belgium", "🇧🇪", "R16"), ("Croatia", "🇭🇷", "SF"),
+    # A coherent finished-tournament state. Placements are internally consistent
+    # with the bracket in FIXTURES below (Brazil champion, Argentina runner-up,
+    # France 3rd, Croatia 4th, the rest out at the round they lost).
+    ("Brazil", "🇧🇷", "Winner"), ("Argentina", "🇦🇷", "Runner-up"),
+    ("France", "🇫🇷", "3rd"), ("Croatia", "🇭🇷", "4th"),
+    ("Spain", "🇪🇸", "QF"), ("Germany", "🇩🇪", "QF"),
+    ("Portugal", "🇵🇹", "R16"), ("Netherlands", "🇳🇱", "R16"),
+    ("Belgium", "🇧🇪", "R16"), ("England", "🏴", "R16"),
 ]
+# eliminated = everyone except the champion. Set explicitly per team below.
+_NOT_ELIMINATED = {"Winner"}
 FIXTURES = [
-    ("Brazil", "Croatia", 2, 1, "FINISHED", "QF"),
-    ("France", "England", 1, 1, "LIVE", "SF"),
-    ("Spain", "Germany", 0, 2, "FINISHED", "QF"),
-    ("Argentina", "Netherlands", 3, 2, "FINISHED", "QF"),
-    ("Portugal", "Belgium", 1, 0, "FINISHED", "R16"),
+    # Semi-finals
+    ("Brazil", "France", 2, 1, "FINISHED", "SF"),
+    ("Argentina", "Croatia", 3, 2, "FINISHED", "SF"),
+    # 3rd-place play-off: France beat Croatia → France 3rd, Croatia 4th
+    ("France", "Croatia", 2, 0, "FINISHED", "3rd_playoff"),
+    # Final: Brazil beat Argentina → Brazil champion, Argentina runner-up
+    ("Brazil", "Argentina", 1, 0, "FINISHED", "Final"),
+    # A couple of earlier-round results for flavour
+    ("Spain", "Portugal", 2, 1, "FINISHED", "QF"),
+    ("Germany", "Belgium", 1, 0, "FINISHED", "QF"),
 ]
 
 
@@ -78,8 +89,10 @@ async def seed() -> None:
 
         teams = []
         for name, flag, stage in TEAMS:
+            # Everyone except the champion is eliminated (their run has ended),
+            # including finished placements Runner-up/3rd/4th and round exits.
             t = Team(sweepstake_id=sweep.id, name=name, flag_emoji=flag,
-                     stage=stage, eliminated=(stage == "Out"))
+                     stage=stage, eliminated=(stage not in _NOT_ELIMINATED))
             db.add(t)
             teams.append(t)
         await db.flush()
