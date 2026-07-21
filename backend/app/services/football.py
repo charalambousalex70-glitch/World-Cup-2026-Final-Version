@@ -369,23 +369,44 @@ async def _recompute_team_stages(db: AsyncSession, sweepstake: Sweepstake) -> No
         t.stage = "Group"
         t.eliminated = False
 
+    # Rank of finishes so we never DOWNGRADE a team's stage when fixtures are
+    # processed out of order (e.g. a 3rd-place win seen before the SF loss must
+    # not be overwritten back to "SF"). Higher = better/later.
+    _RANK = {"Group": 0, "R32": 1, "R16": 2, "QF": 3, "SF": 4,
+             "4th": 5, "3rd": 6, "Final": 7, "Runner-up": 7, "Winner": 8}
+    # Terminal placements — once a team has one, NOTHING (not even advancing to a
+    # same-rank round) may overwrite it. This is what makes the recompute fully
+    # order-independent regardless of which knockout fixture is seen first.
+    _TERMINAL = {"Winner", "Runner-up", "3rd", "4th"}
+
+    def _reached(team, rnd):
+        """Team is currently IN a round (transient). Rank-guarded, and never
+        overwrites a decided terminal placement."""
+        if team is None or team.stage in _TERMINAL:
+            return
+        if _RANK.get(rnd, 0) > _RANK.get(team.stage, 0):
+            team.stage = rnd
+
+    def _finish(team, placement, *, eliminated):
+        """Assign a terminal/ґfinal result. Sticky against later same-or-lower
+        updates, but a strictly-better finish still wins (defensive)."""
+        if team is None:
+            return
+        if team.stage in _TERMINAL and _RANK.get(placement, 0) <= _RANK.get(team.stage, 0):
+            return  # already have an equal/better decided placement
+        team.stage = placement
+        team.eliminated = eliminated
+
     for fx in all_fx:
         rnd = fx.stage  # Group | R32 | R16 | QF | SF | Final | 3rd_playoff
         if rnd == "Group":
             continue
-        # The 3rd-place play-off doesn't sit on the main ladder; handle it below.
+        # "Furthest reached" for scheduled/in-play knockout games.
         if rnd != "3rd_playoff":
             for side in (fx.home_team, fx.away_team):
-                t = by_name.get(side)
-                if not t:
-                    continue
-                try:
-                    if STAGE_ORDER.index(rnd) > STAGE_ORDER.index(t.stage):
-                        t.stage = rnd
-                except ValueError:
-                    pass
+                _reached(by_name.get(side), rnd)
 
-        # Apply finished knockout results: winner advances, loser is out here.
+        # Apply finished knockout results.
         if fx.status == "FINISHED" and fx.home_score is not None and fx.away_score is not None:
             winner = None
             if fx.home_score > fx.away_score:
@@ -407,18 +428,25 @@ async def _recompute_team_stages(db: AsyncSession, sweepstake: Sweepstake) -> No
                 loser = fx.away_team if winner == fx.home_team else fx.home_team
                 w, l = by_name.get(winner), by_name.get(loser)
                 if rnd == "3rd_playoff":
-                    # Decides 3rd (winner) vs 4th (loser); both are eliminated.
-                    if w: w.stage = "3rd"; w.eliminated = True
-                    if l: l.stage = "4th"; l.eliminated = True
+                    _finish(w, "3rd", eliminated=True)
+                    _finish(l, "4th", eliminated=True)
                 elif rnd == "Final":
-                    # Champion vs Runner-up.
-                    if w: w.stage = "Winner"; w.eliminated = False
-                    if l: l.stage = "Runner-up"; l.eliminated = True
+                    _finish(w, "Winner", eliminated=False)
+                    _finish(l, "Runner-up", eliminated=True)
+                elif rnd == "SF":
+                    # Winner reaches the Final (transient — could still be seen
+                    # before the Final result). Loser reached the semis and still
+                    # has the 3rd-place play-off, so NOT eliminated yet.
+                    _reached(w, "Final")
+                    _reached(l, "SF")
                 else:
-                    if w:
-                        _advance(w, rnd)        # into the next round
-                    if l:
-                        l.stage = rnd           # eliminated at the round they lost
+                    # R32/R16/QF: winner advances (transient), loser is out here.
+                    if w and w.stage not in _TERMINAL:
+                        nxt = STAGE_ORDER[min(STAGE_ORDER.index(rnd) + 1, len(STAGE_ORDER) - 1)] \
+                              if rnd in STAGE_ORDER else rnd
+                        _reached(w, nxt)
+                    if l and l.stage not in _TERMINAL:
+                        l.stage = rnd
                         l.eliminated = True
     await db.flush()
 
