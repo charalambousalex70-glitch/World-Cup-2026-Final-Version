@@ -416,6 +416,32 @@ async def sync_now(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
     return rows
 
 
+@router.post("/{sid}/recompute-stages")
+async def recompute_stages(sid: uuid.UUID, db: AsyncSession = Depends(get_db),
+                           user: User = Depends(get_current_user)):
+    """Admin: rebuild every team's stage/eliminated flag from the fixtures in the
+    database, from scratch. Fixes stale or inconsistent stages (e.g. a team stuck
+    at 'SF' after a data hiccup) without waiting for a live feed sync. The
+    recompute resets all teams to 'Group' then replays fixtures through the
+    order-independent logic, so the result is always internally consistent."""
+    sweep = await db.get(Sweepstake, sid)
+    if not sweep:
+        raise HTTPException(404, "Not found")
+    _require_admin(sweep, user)
+    await football._recompute_team_stages(db, sweep)
+    await db.commit()
+    full = await _load_full(db, sid)
+    fixtures = await _load_sweep_fixtures(db, sid)
+    board = compute_leaderboard(full, fixtures)
+    await manager.broadcast(str(sid), "leaderboard_updated",
+                            {"leaderboard": [r.model_dump() for r in board]})
+    return {
+        "recomputed": True,
+        "teams": [{"team": r.team_name, "stage": r.stage,
+                   "eliminated": r.eliminated, "points": r.points} for r in board],
+    }
+
+
 # ---------- Participants ----------
 @router.delete("/{sid}/participants/{pid}", response_model=SweepstakeOut)
 async def remove_participant(sid: uuid.UUID, pid: uuid.UUID,
