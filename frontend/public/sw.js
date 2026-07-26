@@ -1,9 +1,15 @@
-/* LuckPot service worker (v3 — network-first for the app shell).
+/* LuckPot service worker (v4 — network-first for the app shell).
  * KEY FIX: index.html and the app are fetched network-first, so a new deploy
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
+ *
+ * v4 changes:
+ *  - CACHE version bumped from v70 to v71 (clears old caches on activate)
+ *  - Removed dead WebSocket guard: WebSocket requests never go through fetch,
+ *    so the `url.protocol.startsWith('ws')` check was a no-op. Removed to
+ *    avoid confusion and keep the fetch handler clean.
  */
-const CACHE = "luckpot-v70";
+const CACHE = "luckpot-v71";
 
 self.addEventListener("install", () => self.skipWaiting());
 
@@ -24,7 +30,9 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const { request } = e;
   const url = new URL(request.url);
-  if (request.method !== "GET" || url.protocol.startsWith("ws")) return;
+
+  // Only handle GET requests; skip non-HTTP(S) schemes.
+  if (request.method !== "GET" || !url.protocol.startsWith("http")) return;
 
   // API calls always go to network (never serve stale data for writes/auth).
   if (url.pathname.startsWith("/api/")) return;
