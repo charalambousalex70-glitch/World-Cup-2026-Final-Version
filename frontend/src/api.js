@@ -4,8 +4,15 @@
  * to same-origin /api which works behind a proxy.
  */
 
+// Safe Vite env check: import.meta is a syntax node, not a variable, so we
+// can't use `typeof import !== 'undefined'`. Test for globalThis.__VITE__
+// marker OR check if the import.meta.env object is present at runtime inside a
+// Vite bundle. The try/catch handles non-Vite environments cleanly.
+let _viteApiUrl = null;
+try { _viteApiUrl = import.meta?.env?.VITE_API_URL ?? null; } catch { /* not a Vite bundle */ }
+
 const API_BASE =
-  (typeof import !== "undefined" && import.meta && import.meta.env && import.meta.env.VITE_API_URL) ||
+  _viteApiUrl ||
   window.__API_URL__ ||
   ""; // empty = same origin
 
@@ -58,24 +65,55 @@ export const api = {
   // draw
   runDraw: (id) => req(`/sweepstakes/${id}/draw`, { method: "POST" }),
   approveDraw: (id) => req(`/sweepstakes/${id}/draw/approve`, { method: "POST" }),
+  resetDraw: (id) => req(`/sweepstakes/${id}/draw/reset`, { method: "POST" }),
 
   // data
   leaderboard: (id) => req(`/sweepstakes/${id}/leaderboard`),
   fixtures: (id) => req(`/sweepstakes/${id}/fixtures`),
   syncNow: (id) => req(`/sweepstakes/${id}/sync`, { method: "POST" }),
+  recomputeStages: (id) => req(`/sweepstakes/${id}/recompute-stages`, { method: "POST" }),
   notifications: (id) => req(`/sweepstakes/${id}/notifications`),
+  updateEmailPreview: (id) => req(`/sweepstakes/${id}/update-email/preview`),
+  sendUpdateEmail: (id) => req(`/sweepstakes/${id}/update-email/send`, { method: "POST" }),
 
   // payments
   setPayment: (sid, pid, has_paid) =>
     req(`/sweepstakes/${sid}/participants/${pid}/payment`, { method: "PATCH", body: { has_paid } }),
+  updatePaymentInfo: (sid, data) =>
+    req(`/sweepstakes/${sid}/payment-info`, { method: "PATCH", body: data }),
+
+  // predictions
+  getPredictions: (sid) => req(`/sweepstakes/${sid}/predictions`),
+  savePrediction: (sid, fixture_id, home, away) =>
+    req(`/sweepstakes/${sid}/predictions`, { method: "POST", body: { fixture_id, home, away } }),
+  getPredBoard: (sid) => req(`/sweepstakes/${sid}/predictions/board`),
+  getPredHistory: (sid, uid) => req(`/sweepstakes/${sid}/predictions/history/${uid}`),
+
+  // comments / chat
+  getComments: (sid) => req(`/sweepstakes/${sid}/comments`),
+  postComment: (sid, body) => req(`/sweepstakes/${sid}/comments`, { method: "POST", body: { body } }),
+  reactToComment: (sid, cid, emoji) =>
+    req(`/sweepstakes/${sid}/comments/${cid}/react`, { method: "POST", body: { emoji } }),
+
+  // standings
+  standings: (sid, refresh = false) =>
+    req(`/sweepstakes/${sid}/standings${refresh ? "?refresh=1" : ""}`),
+
+  // admin
+  adminGetResetCode: (email) => req(`/auth/reset/code?email=${encodeURIComponent(email)}`),
 };
 
 /* Live updates. Returns a close() function.
  * onEvent receives ({event, data}). */
 export function connectLive(sweepstakeId, onEvent) {
-  const wsBase = API_BASE
-    ? API_BASE.replace(/^http/, "ws")
-    : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+  // Correctly derive ws:// or wss:// from the API base URL.
+  // API_BASE may be https://..., http://..., or empty (same-origin).
+  let wsBase;
+  if (API_BASE) {
+    wsBase = API_BASE.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+  } else {
+    wsBase = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+  }
   let ws;
   let alive = true;
   let retry = 0;
