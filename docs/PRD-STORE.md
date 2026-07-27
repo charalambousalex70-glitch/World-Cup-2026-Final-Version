@@ -55,26 +55,46 @@ We can add any of these later — they are Phase 5+.
 
 ---
 
-## 2. ⚠️ One thing I need to flag before we start
+## 2. ✅ Repo decision — RESOLVED
 
 **This repository currently contains a different app.** It is
 `SweepStake Live` — a World Cup 2026 football sweepstake platform (draws,
-leaderboards, live scores over WebSockets).
+leaderboards, live scores over WebSockets). An online store is a completely
+different product.
 
-An online store is a **completely different product**. So before I write code,
-I need to know which of these you mean:
+**Decision (2026-07-27): the store gets a BRAND NEW REPO.**
 
-- **(A) Pivot** — the sweepstake app is finished/parked, and this repo becomes
-  the store. We add store code alongside and stop developing the sweepstake.
-- **(B) Add a merch store** to the existing sweepstake app (sell shirts to the
-  people running sweepstakes). Both live in one app, shared login.
-- **(C) Brand new repo** for the store. Cleanest separation.
+The sweepstake app stays exactly as it is, untouched and still deployable. The
+store starts clean. In restaurant terms: you're not converting the football pub
+into a shop — you're opening a new unit, and taking the good kitchen equipment
+with you.
 
-**This PRD works for all three** — the store design is identical either way.
-The only thing that changes is where the files go. My recommendation is **(A) or
-(C)**; I'll ask you directly and we'll go from there.
+**What "taking the equipment" means concretely.** We copy these proven files out
+of this repo into the new one on day one, so the new store is *not* starting
+from nothing:
 
-### The good news either way
+```
+NEW REPO                              COPIED FROM (this repo)
+backend/app/core/database.py     ←──  backend/app/core/database.py   (as-is)
+backend/app/core/config.py       ←──  backend/app/core/config.py     (trim football keys, add Stripe/R2)
+backend/app/core/security.py     ←──  backend/app/core/security.py   (as-is)
+backend/app/api/deps.py          ←──  backend/app/api/deps.py        (as-is)
+backend/app/models/__init__.py   ←──  the `User` class only
+backend/app/api/auth.py          ←──  backend/app/api/auth.py        (Phase 4)
+backend/app/services/email.py    ←──  backend/app/services/email.py  (Phase 3)
+backend/Dockerfile               ←──  backend/Dockerfile             (as-is)
+docker-compose.yml               ←──  docker-compose.yml             (rename db)
+```
+
+Everything football-related — draws, fixtures, scoring, live polling,
+WebSockets — is **left behind**. Cost of this choice: roughly 20 extra minutes
+today. Benefit: no dead code, no confusing mixed-purpose repo, and this repo
+keeps working.
+
+**This PRD is otherwise unchanged by the decision** — the store design is
+identical wherever the files live.
+
+### The equipment we're taking
 
 I read the existing code, and **the foundation is genuinely reusable**. This is
 the single biggest reason we can get a win today — roughly a day of setup work
@@ -251,8 +271,8 @@ CREATE TABLE products (
     slug          VARCHAR(120) UNIQUE NOT NULL, -- "world-cup-2026-tee"
     name          VARCHAR(200) NOT NULL,
     description   TEXT,
-    price_cents   INTEGER      NOT NULL,        -- ⚠️ SEE THE NOTE BELOW
-    currency      VARCHAR(3)   DEFAULT 'EUR',
+    price_cents   INTEGER      NOT NULL,        -- ⚠️ SEE THE NOTE BELOW (pence)
+    currency      VARCHAR(3)   DEFAULT 'GBP',
     category_id   UUID REFERENCES categories(id),
     image_url     VARCHAR(500),                 -- full URL; swappable storage
     image_alt     VARCHAR(200),                 -- accessibility + SEO
@@ -272,9 +292,14 @@ CREATE INDEX ix_products_slug     ON products(slug);
 `19.99` exactly — the same way you can't write ⅓ exactly as a decimal. Store
 money as a decimal and you eventually get an order totalling `59.969999999999`.
 
-So we store **whole cents**: €19.99 becomes `1999`. All maths is on whole
+So we store **whole pence**: £19.99 becomes `1999`. All maths is on whole
 numbers, which is always exact. We divide by 100 only at the moment we print it
-on screen. This is what every payment system does — Stripe's API takes cents too.
+on screen. This is what every payment system does — Stripe's API takes the
+smallest currency unit too.
+
+*(The column is named `price_cents` rather than `price_pence` because "cents" is
+the industry-standard name for "smallest unit of the currency" — it stays
+correct if you ever add EUR or USD in Phase 5.)*
 
 I'm flagging this because the existing sweepstake code uses
 `entry_fee: Float` (`backend/app/models/__init__.py`). That's a latent bug in
@@ -300,7 +325,7 @@ Open it in Excel or Google Sheets, fill in one row per product, and give it back
 |---|---|---|
 | `name` | Product name as customers see it | `World Cup 2026 Home Tee` |
 | `category` | Which group. Just type it — reuse the same spelling | `T-Shirts` |
-| `price` | Normal price with a decimal point. **I convert to cents** | `19.99` |
+| `price_gbp` | Normal price in pounds with a decimal point. **I convert to pence** | `19.99` |
 | `description` | 1–3 sentences | `Soft cotton tee, unisex fit.` |
 | `image_filename` | The photo's filename | `home-tee.jpg` |
 | `image_alt` | Describe the photo for blind users & Google | `Navy tee with 2026 crest` |
@@ -382,7 +407,7 @@ CREATE TABLE orders (
     subtotal_cents    INTEGER NOT NULL,
     shipping_cents    INTEGER DEFAULT 0,
     total_cents       INTEGER NOT NULL,
-    currency          VARCHAR(3) DEFAULT 'EUR',
+    currency          VARCHAR(3) DEFAULT 'GBP',
     stripe_session_id VARCHAR(255) UNIQUE,
     ship_name         VARCHAR(200),
     ship_line1        VARCHAR(200),
@@ -418,7 +443,8 @@ into the order line at purchase time. Orders are history — history doesn't cha
 ## 5. The roadmap
 
 ### Phase 0 — Prep the kitchen *(~1 hour, today)*
-- [ ] Decide repo question from §2 (A / B / C)
+- [x] Repo decision — **brand new repo** (§2)
+- [ ] Create the new repo and copy the reusable core files listed in §2
 - [ ] Install superpowers + 3 agents from claude-agents-library
 - [ ] Create `categories` + `products` tables via Alembic migration
 - [ ] Load your CSV + photos
@@ -442,6 +468,7 @@ into the order line at purchase time. Orders are history — history doesn't cha
 - [ ] Move photos to Cloudflare R2, update `image_url`
 - [ ] `orders`, `order_items`, `webhook_events` tables
 - [ ] `POST /api/v1/checkout` — **server-side price lookup**
+- [ ] Flat shipping fee via `SHIPPING_FLAT_CENTS` env var, as its own line item
 - [ ] Stripe Checkout Session with shipping address collection
 - [ ] `POST /api/v1/webhooks/stripe` — signature verify + idempotent fulfilment
 - [ ] Thank-you page + cancel page
@@ -499,15 +526,30 @@ get a real automated test for free. Manual testing that writes its own tests.
 
 ---
 
-## 7. Decisions I need from you
+## 7. Decisions
 
-| # | Question | My recommendation |
+### ✅ Settled (2026-07-27)
+
+| # | Question | Decision |
 |---|---|---|
-| 1 | **Repo: pivot, add-on, or new repo?** (§2) | Pivot or new repo |
-| 2 | Currency — EUR, GBP or USD? | Pick one now; multi-currency is Phase 5 |
-| 3 | Which countries do you ship to? | Needed for Stripe's `allowed_countries` |
-| 4 | Flat shipping fee, or free shipping? | Flat fee is simplest for Phase 2 |
-| 5 | Store name + rough colour scheme? | Needed for the catalog page today |
+| 1 | Repo — pivot, add-on, or new? | **Brand new repo.** Copy the reusable core across (§2) |
+| 2 | Currency | **GBP (£).** `price_cents` holds pence. Multi-currency is Phase 5 |
+| 3 | Shipping | **Flat fee per order.** One fixed price regardless of basket size |
+
+**How flat-fee shipping works in the build.** A single setting,
+`SHIPPING_FLAT_CENTS`, lives in the environment variables — not hardcoded — so
+you can change the price later without a code change. At checkout the server
+adds it as its own Stripe line item, so the customer sees
+"Shipping £4.99" as a separate line rather than a mysteriously inflated total.
+Changing it to free shipping later is one variable set to `0`.
+
+### ⏳ Still open (not blocking Phase 1)
+
+| # | Question | Needed by |
+|---|---|---|
+| 4 | **What is the flat shipping price?** e.g. £4.99 | Phase 2 |
+| 5 | **Which countries do you ship to?** UK only, or UK + Ireland, etc. | Phase 2 — sets Stripe's `allowed_countries` |
+| 6 | **Store name + rough colour scheme?** | Phase 1 — nice to have, I'll use a neutral default otherwise |
 
 **You do NOT need any accounts today.** Railway, Stripe and Cloudflare accounts
 are only needed at Phase 2. Phase 1 runs locally and on Railway's free tier.
