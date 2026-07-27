@@ -1,8 +1,6 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": null,
-  "outputDirectory": "public",
   "cleanUrls": true,
+  "outputDirectory": "public",
   "rewrites": [
     { "source": "/((?!icons|manifest|sw|.*\\.).*)", "destination": "/index.html" }
   ],

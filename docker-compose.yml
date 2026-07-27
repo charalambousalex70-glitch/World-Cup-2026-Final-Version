@@ -1,6 +1,12 @@
 # Local development: Postgres + API in one command.
 #   docker compose up --build
 #   docker compose exec api python -m app.seed   # load demo data
+#
+# FIX: JWT_SECRET is no longer hardcoded here. Create a .env file in the
+# repo root with JWT_SECRET=<your-local-dev-secret> instead, which docker
+# compose picks up automatically. This prevents the pattern of copy-pasting
+# a known-weak compose secret into production.
+# A sample .env.example is provided in backend/ for reference.
 services:
   db:
     image: postgres:16-alpine
@@ -22,9 +28,11 @@ services:
       db: { condition: service_healthy }
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sweepstake
-      JWT_SECRET: dev-secret-change-me
+      # JWT_SECRET: set this in a .env file in the repo root (never commit secrets)
+      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-secret-do-not-use-in-production}
       CORS_ORIGINS: http://localhost:5173,http://localhost:3000
       FOOTBALL_API_KEY: ""   # blank = offline/demo mode
+      AUTO_SEED: "true"       # load demo data automatically on local first boot
     ports: ["8000:8000"]
 
 volumes:

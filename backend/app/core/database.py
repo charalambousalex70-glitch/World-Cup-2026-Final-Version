@@ -6,6 +6,9 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
+# FIX: Added connect_args with command_timeout so asyncpg does not hang
+# indefinitely waiting for a query response on slow Render cold-starts or
+# dropped idle connections. 60 s is generous but prevents infinite blocking.
 engine = create_async_engine(
     settings.async_database_url,
     echo=False,
@@ -17,6 +20,7 @@ engine = create_async_engine(
     pool_size=5,
     max_overflow=10,
     pool_timeout=30,
+    connect_args={"command_timeout": 60},  # asyncpg: max seconds per query
 )
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
