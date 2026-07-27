@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Store</title>
+<style>
+  :root{
+    --bg:#fbfbfc; --surface:#fff; --ink:#16181d; --muted:#6b7280;
+    --line:#e5e7eb; --accent:#1f6feb; --accent-ink:#fff; --ok:#0f7b3f;
+    --radius:14px; --shadow:0 1px 3px rgba(16,24,40,.06),0 6px 18px rgba(16,24,40,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#0f1115; --surface:#171a21; --ink:#e8eaed; --muted:#9aa3af;
+           --line:#262b35; --accent:#4c8dff; --ok:#4ade80;
+           --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.3); }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  img{max-width:100%;display:block}
+  button{font:inherit;cursor:pointer}
+
+  /* ---------- header ---------- */
+  header{position:sticky;top:0;z-index:20;background:var(--surface);
+         border-bottom:1px solid var(--line);box-shadow:var(--shadow)}
+  .bar{max-width:1120px;margin:0 auto;padding:14px 20px;
+       display:flex;align-items:center;gap:16px}
+  .brand{font-weight:700;font-size:1.15rem;letter-spacing:-.01em;
+         background:none;border:0;color:inherit;padding:0}
+  .spacer{flex:1}
+  .cart-btn{position:relative;background:var(--accent);color:var(--accent-ink);
+            border:0;border-radius:999px;padding:9px 18px;font-weight:600}
+  .cart-count{position:absolute;top:-6px;right:-6px;background:var(--ink);
+              color:var(--bg);border-radius:999px;min-width:22px;height:22px;
+              font-size:.75rem;font-weight:700;display:grid;place-items:center;
+              padding:0 6px}
+  .cart-count[hidden]{display:none}
+
+  /* ---------- filters ---------- */
+  .filters{max-width:1120px;margin:0 auto;padding:20px 20px 4px;
+           display:flex;gap:9px;flex-wrap:wrap}
+  .chip{background:var(--surface);border:1px solid var(--line);color:var(--ink);
+        border-radius:999px;padding:8px 16px;font-weight:500}
+  .chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);
+                             border-color:var(--accent)}
+
+  /* ---------- grid ---------- */
+  main{max-width:1120px;margin:0 auto;padding:20px}
+  .grid{display:grid;gap:20px;
+        grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+  .card{background:var(--surface);border:1px solid var(--line);
+        border-radius:var(--radius);overflow:hidden;display:flex;
+        flex-direction:column;box-shadow:var(--shadow)}
+  .card .thumb{width:100%;aspect-ratio:1;object-fit:cover;background:var(--line);
+               border:0;padding:0;cursor:pointer}
+  .card .body{padding:14px;display:flex;flex-direction:column;gap:8px;flex:1}
+  .card h3{margin:0;font-size:1rem;font-weight:600}
+  .card h3 button{background:none;border:0;padding:0;color:inherit;
+                  font:inherit;text-align:left}
+  .price{font-weight:700;font-size:1.05rem}
+  .cat{color:var(--muted);font-size:.82rem}
+  .add{margin-top:auto;background:var(--accent);color:var(--accent-ink);border:0;
+       border-radius:10px;padding:11px;font-weight:600}
+  .add[disabled]{background:var(--line);color:var(--muted);cursor:not-allowed}
+
+  .msg{padding:60px 20px;text-align:center;color:var(--muted)}
+
+  /* ---------- drawer (cart + product detail) ---------- */
+  .scrim{position:fixed;inset:0;background:rgba(9,12,18,.5);z-index:30;
+         opacity:0;pointer-events:none;transition:opacity .18s}
+  .scrim.open{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;height:100dvh;width:min(420px,100%);
+          background:var(--surface);z-index:31;display:flex;flex-direction:column;
+          transform:translateX(100%);transition:transform .22s ease;
+          border-left:1px solid var(--line)}
+  .drawer.open{transform:none}
+  .drawer header{position:static;display:flex;align-items:center;gap:12px;
+                 padding:16px 18px;border-bottom:1px solid var(--line);box-shadow:none}
+  .drawer h2{margin:0;font-size:1.05rem}
+  .x{margin-left:auto;background:none;border:0;color:var(--muted);font-size:1.6rem;
+     line-height:1;padding:0 4px}
+  .drawer .content{flex:1;overflow-y:auto;padding:18px}
+  .drawer footer{padding:18px;border-top:1px solid var(--line)}
+
+  .line{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .line img{width:64px;height:64px;object-fit:cover;border-radius:8px;
+            background:var(--line);flex:none}
+  .line .info{flex:1;min-width:0}
+  .line .nm{font-weight:600;font-size:.92rem}
+  .qty{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .qty button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);
+              background:var(--bg);color:var(--ink);font-weight:700}
+  .rm{background:none;border:0;color:var(--muted);font-size:.82rem;
+      text-decoration:underline;padding:0;margin-top:6px}
+  .totals{display:flex;justify-content:space-between;font-weight:700;
+          font-size:1.15rem;margin-bottom:14px}
+  .checkout{width:100%;background:var(--accent);color:var(--accent-ink);border:0;
+            border-radius:10px;padding:14px;font-weight:700}
+  .checkout[disabled]{background:var(--line);color:var(--muted);cursor:not-allowed}
+  .soon{text-align:center;color:var(--muted);font-size:.82rem;margin-top:10px}
+  .detail img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;
+              background:var(--line);margin-bottom:16px}
+  .detail h3{margin:0 0 6px;font-size:1.3rem}
+  .detail p{color:var(--muted)}
+
+  /* toast */
+  /* Sits clear of the cart drawer's footer so it never covers Checkout. */
+  .toast{position:fixed;left:50%;bottom:118px;transform:translate(-50%,14px);
+         background:var(--ink);color:var(--bg);padding:12px 20px;border-radius:999px;
+         font-weight:600;font-size:.9rem;z-index:40;opacity:0;
+         pointer-events:none;transition:.2s}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <button class="brand" id="brand" type="button">Store</button>
+    <div class="spacer"></div>
+    <button class="cart-btn" id="openCart" type="button">
+      Cart <span class="cart-count" id="cartCount" hidden>0</span>
+    </button>
+  </div>
+</header>
+
+<nav class="filters" id="filters" aria-label="Product categories"></nav>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="msg" id="msg">Loading products…</div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+
+<aside class="drawer" id="drawer" aria-hidden="true" role="dialog" aria-modal="true">
+  <header>
+    <h2 id="drawerTitle">Your cart</h2>
+    <button class="x" id="closeDrawer" type="button" aria-label="Close">&times;</button>
+  </header>
+  <div class="content" id="drawerBody"></div>
+  <footer id="drawerFoot" hidden>
+    <div class="totals"><span>Total</span><span id="total">—</span></div>
+    <button class="checkout" id="checkout" type="button" disabled>Checkout</button>
+    <div class="soon">Payment arrives in Phase 2</div>
+  </footer>
+</aside>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var API = "/api/v1";
+  var CART_KEY = "store.cart.v1";
+  var SYMBOL = "£";
+
+  var state = { products: [], category: null, cart: loadCart(), view: "cart" };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ---------- money ----------
+  // Prices travel as whole pence and are only turned into pounds here, at the
+  // very last moment before a human reads them.
+  function money(pence) {
+    return SYMBOL + (pence / 100).toFixed(2);
+  }
+
+  // ---------- cart storage ----------
+  // The cart lives in the browser. No account, no server, survives a refresh.
+  // Phase 2 sends only {slug, qty} to the server, which looks up the real
+  // prices itself — the prices cached here are for display only and are never
+  // trusted for charging.
+  function loadCart() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(CART_KEY) || "[]");
+      if (!Array.isArray(raw)) return [];
+      return raw.filter(function (l) {
+        return l && typeof l.slug === "string" && Number.isFinite(l.qty) && l.qty > 0;
+      });
+    } catch (e) {
+      return [];   // corrupted storage should empty the cart, not break the shop
+    }
+  }
+
+  function saveCart() {
+    try {
+      localStorage.setItem(CART_KEY, JSON.stringify(state.cart));
+    } catch (e) { /* private browsing can block writes; keep going in memory */ }
+    renderCount();
+  }
+
+  function cartTotal() {
+    return state.cart.reduce(function (sum, l) { return sum + l.price_cents * l.qty; }, 0);
+  }
+
+  function cartQty() {
+    return state.cart.reduce(function (sum, l) { return sum + l.qty; }, 0);
+  }
+
+  // ---------- rendering ----------
+  function renderCount() {
+    var n = cartQty(), el = $("cartCount");
+    el.textContent = n;
+    el.hidden = n === 0;
+  }
+
+  function productCard(p) {
+    var card = document.createElement("article");
+    card.className = "card";
+
+    var img = document.createElement("img");
+    img.className = "thumb";
+    img.loading = "lazy";
+    img.src = p.image_url || placeholder(p.name);
+    img.alt = p.image_alt || p.name;
+    img.addEventListener("error", function () { img.src = placeholder(p.name); });
+    img.addEventListener("click", function () { showProduct(p.slug); });
+    card.appendChild(img);
+
+    var body = document.createElement("div");
+    body.className = "body";
+
+    var h3 = document.createElement("h3");
+    var nameBtn = document.createElement("button");
+    nameBtn.type = "button";
+    nameBtn.textContent = p.name;
+    nameBtn.addEventListener("click", function () { showProduct(p.slug); });
+    h3.appendChild(nameBtn);
+    body.appendChild(h3);
+
+    if (p.category_name) {
+      var cat = document.createElement("div");
+      cat.className = "cat";
+      cat.textContent = p.category_name;
+      body.appendChild(cat);
+    }
+
+    var price = document.createElement("div");
+    price.className = "price";
+    price.textContent = money(p.price_cents);
+    body.appendChild(price);
+
+    var add = document.createElement("button");
+    add.className = "add";
+    add.type = "button";
+    if (p.in_stock) {
+      add.textContent = "Add to cart";
+      add.addEventListener("click", function () { addToCart(p); });
+    } else {
+      add.textContent = "Sold out";
+      add.disabled = true;
+    }
+    body.appendChild(add);
+
+    card.appendChild(body);
+    return card;
+  }
+
+  // A tiny inline SVG so a missing photo still looks deliberate.
+  function placeholder(label) {
+    var initial = (label || "?").trim().charAt(0).toUpperCase();
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">' +
+      '<rect width="400" height="400" fill="#d8dbe2"/>' +
+      '<text x="50%" y="50%" font-family="system-ui" font-size="140" fill="#8a91a0" ' +
+      'text-anchor="middle" dominant-baseline="central">' + initial + "</text></svg>";
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  }
+
+  function renderGrid() {
+    var grid = $("grid"), msg = $("msg");
+    grid.textContent = "";
+    if (!state.products.length) {
+      msg.textContent = "No products here yet.";
+      msg.hidden = false;
+      return;
+    }
+    msg.hidden = true;
+    state.products.forEach(function (p) { grid.appendChild(productCard(p)); });
+  }
+
+  function renderFilters(cats) {
+    var nav = $("filters");
+    nav.textContent = "";
+    var all = [{ slug: null, name: "All" }].concat(cats);
+    all.forEach(function (c) {
+      var b = document.createElement("button");
+      b.className = "chip";
+      b.type = "button";
+      b.textContent = c.name;
+      b.setAttribute("aria-pressed", String(state.category === c.slug));
+      b.addEventListener("click", function () {
+        state.category = c.slug;
+        loadProducts();
+        Array.prototype.forEach.call(nav.children, function (o) {
+          o.setAttribute("aria-pressed", String(o === b));
+        });
+      });
+      nav.appendChild(b);
+    });
+  }
+
+  // ---------- cart actions ----------
+  function addToCart(p) {
+    var line = null;
+    for (var i = 0; i < state.cart.length; i++) {
+      if (state.cart[i].slug === p.slug) { line = state.cart[i]; break; }
+    }
+    if (line) {
+      line.qty += 1;
+    } else {
+      state.cart.push({
+        slug: p.slug, name: p.name, price_cents: p.price_cents,
+        image_url: p.image_url, qty: 1
+      });
+    }
+    saveCart();
+    toast(p.name + " added");
+  }
+
+  function setQty(slug, qty) {
+    state.cart = state.cart.filter(function (l) {
+      if (l.slug !== slug) return true;
+      l.qty = qty;
+      return qty > 0;
+    });
+    saveCart();
+    renderCart();
+  }
+
+  function renderCart() {
+    state.view = "cart";
+    $("drawerTitle").textContent = "Your cart";
+    var body = $("drawerBody"), foot = $("drawerFoot");
+    body.textContent = "";
+
+    if (!state.cart.length) {
+      var empty = document.createElement("p");
+      empty.className = "msg";
+      empty.textContent = "Your cart is empty.";
+      body.appendChild(empty);
+      foot.hidden = true;
+      return;
+    }
+
+    state.cart.forEach(function (l) {
+      var row = document.createElement("div");
+      row.className = "line";
+
+      var img = document.createElement("img");
+      img.src = l.image_url || placeholder(l.name);
+      img.alt = "";
+      img.addEventListener("error", function () { img.src = placeholder(l.name); });
+      row.appendChild(img);
+
+      var info = document.createElement("div");
+      info.className = "info";
+
+      var nm = document.createElement("div");
+      nm.className = "nm";
+      nm.textContent = l.name;
+      info.appendChild(nm);
+
+      var pr = document.createElement("div");
+      pr.className = "cat";
+      pr.textContent = money(l.price_cents) + " each";
+      info.appendChild(pr);
+
+      var q = document.createElement("div");
+      q.className = "qty";
+      var minus = document.createElement("button");
+      minus.type = "button";
+      minus.textContent = "−";
+      minus.setAttribute("aria-label", "One fewer " + l.name);
+      minus.addEventListener("click", function () { setQty(l.slug, l.qty - 1); });
+      var n = document.createElement("span");
+      n.textContent = l.qty;
+      var plus = document.createElement("button");
+      plus.type = "button";
+      plus.textContent = "+";
+      plus.setAttribute("aria-label", "One more " + l.name);
+      plus.addEventListener("click", function () { setQty(l.slug, l.qty + 1); });
+      q.appendChild(minus); q.appendChild(n); q.appendChild(plus);
+      info.appendChild(q);
+
+      var rm = document.createElement("button");
+      rm.className = "rm";
+      rm.type = "button";
+      rm.textContent = "Remove";
+      rm.addEventListener("click", function () { setQty(l.slug, 0); });
+      info.appendChild(rm);
+
+      row.appendChild(info);
+
+      var sub = document.createElement("div");
+      sub.className = "price";
+      sub.textContent = money(l.price_cents * l.qty);
+      row.appendChild(sub);
+
+      body.appendChild(row);
+    });
+
+    $("total").textContent = money(cartTotal());
+    foot.hidden = false;
+  }
+
+  function showProduct(slug) {
+    state.view = "product";
+    openDrawer();
+    $("drawerTitle").textContent = "Product";
+    $("drawerFoot").hidden = true;
+    var body = $("drawerBody");
+    body.textContent = "Loading…";
+
+    fetch(API + "/products/" + encodeURIComponent(slug))
+      .then(function (r) {
+        if (!r.ok) throw new Error("not found");
+        return r.json();
+      })
+      .then(function (p) {
+        body.textContent = "";
+        var wrap = document.createElement("div");
+        wrap.className = "detail";
+
+        var img = document.createElement("img");
+        img.src = p.image_url || placeholder(p.name);
+        img.alt = p.image_alt || p.name;
+        img.addEventListener("error", function () { img.src = placeholder(p.name); });
+        wrap.appendChild(img);
+
+        var h3 = document.createElement("h3");
+        h3.textContent = p.name;
+        wrap.appendChild(h3);
+
+        var pr = document.createElement("div");
+        pr.className = "price";
+        pr.textContent = money(p.price_cents);
+        wrap.appendChild(pr);
+
+        if (p.description) {
+          var d = document.createElement("p");
+          d.textContent = p.description;
+          wrap.appendChild(d);
+        }
+
+        var add = document.createElement("button");
+        add.className = "checkout";
+        add.type = "button";
+        if (p.in_stock) {
+          add.textContent = "Add to cart";
+          add.addEventListener("click", function () { addToCart(p); renderCart(); });
+        } else {
+          add.textContent = "Sold out";
+          add.disabled = true;
+        }
+        wrap.appendChild(add);
+
+        body.appendChild(wrap);
+      })
+      .catch(function () {
+        body.textContent = "Sorry — we couldn't load that product.";
+      });
+  }
+
+  // ---------- drawer ----------
+  function openDrawer() {
+    $("drawer").classList.add("open");
+    $("drawer").setAttribute("aria-hidden", "false");
+    $("scrim").classList.add("open");
+  }
+
+  function closeDrawer() {
+    $("drawer").classList.remove("open");
+    $("drawer").setAttribute("aria-hidden", "true");
+    $("scrim").classList.remove("open");
+  }
+
+  var toastTimer = null;
+  function toast(text) {
+    var t = $("toast");
+    t.textContent = text;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 1700);
+  }
+
+  // ---------- data ----------
+  function loadProducts() {
+    var url = API + "/products?per_page=60";
+    if (state.category) url += "&category=" + encodeURIComponent(state.category);
+    $("msg").hidden = false;
+    $("msg").textContent = "Loading products…";
+    fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        state.products = data.items || [];
+        renderGrid();
+      })
+      .catch(function () {
+        $("grid").textContent = "";
+        $("msg").hidden = false;
+        $("msg").textContent = "Couldn't reach the shop. Please refresh.";
+      });
+  }
+
+  function boot() {
+    $("openCart").addEventListener("click", function () { openDrawer(); renderCart(); });
+    $("closeDrawer").addEventListener("click", closeDrawer);
+    $("scrim").addEventListener("click", closeDrawer);
+    $("brand").addEventListener("click", function () {
+      state.category = null;
+      closeDrawer();
+      loadProducts();
+      Array.prototype.forEach.call($("filters").children, function (o, i) {
+        o.setAttribute("aria-pressed", String(i === 0));
+      });
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeDrawer();
+    });
+
+    renderCount();
+
+    fetch(API + "/config")
+      .then(function (r) { return r.json(); })
+      .then(function (cfg) {
+        SYMBOL = cfg.currency_symbol || "£";
+        document.title = cfg.store_name;
+        $("brand").textContent = cfg.store_name;
+      })
+      .catch(function () { /* defaults are fine */ });
+
+    fetch(API + "/categories")
+      .then(function (r) { return r.json(); })
+      .then(renderFilters)
+      .catch(function () { /* no filters is survivable; the grid still works */ });
+
+    loadProducts();
+
+    // A /product/<slug> link opens straight into that product.
+    var m = window.location.pathname.match(/^\/product\/([\w-]+)$/);
+    if (m) showProduct(m[1]);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

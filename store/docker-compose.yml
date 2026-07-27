@@ -1,0 +1,42 @@
+# Optional: run the store against a real Postgres locally, the way production
+# runs it. You do NOT need this to develop — the app falls back to SQLite with
+# no setup at all. Use this when you want to be sure something works on
+# Postgres specifically before deploying.
+#
+#   docker compose up
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: store
+      POSTGRES_PASSWORD: store
+      POSTGRES_DB: store
+    ports:
+      - "5432:5432"
+    volumes:
+      - store_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U store"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://store:store@db:5432/store
+      ENVIRONMENT: development
+      STORE_NAME: Our Store
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./web:/app/web
+      - ./data:/app/data
+
+volumes:
+  store_pgdata:
