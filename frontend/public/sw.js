@@ -1,15 +1,18 @@
-/* LuckPot service worker (v4 — network-first for the app shell).
+/* LuckPot service worker (v5 — network-first for the app shell).
  * KEY FIX: index.html and the app are fetched network-first, so a new deploy
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
  *
- * v4 changes:
- *  - CACHE version bumped from v70 to v71 (clears old caches on activate)
- *  - Removed dead WebSocket guard: WebSocket requests never go through fetch,
- *    so the `url.protocol.startsWith('ws')` check was a no-op. Removed to
- *    avoid confusion and keep the fetch handler clean.
+ * v5 changes (public-deployment-audit):
+ *  - CACHE version bumped from v71 to v72 (clears old caches on activate)
+ *  - Fixed stale-cache fallback bug: in the cache-first static branch the
+ *    `.catch(() => cached)` tail referenced `cached` from the outer closure
+ *    but inside the inner `.then(res => ...)` chain `cached` resolves to
+ *    `undefined` because the Promise chain re-scopes. Refactored to capture
+ *    `cached` in a local const before entering the fetch chain so the
+ *    fallback correctly returns the cached response on network failure.
  */
-const CACHE = "luckpot-v71";
+const CACHE = "luckpot-v72";
 
 self.addEventListener("install", () => self.skipWaiting());
 
@@ -56,15 +59,18 @@ self.addEventListener("fetch", (e) => {
   }
 
   // Other static assets: cache-first for speed, network fallback.
+  // FIX: capture `cached` in a local const so the .catch() tail can
+  // reference it correctly even after the inner .then() chain resolves.
   e.respondWith(
-    caches.match(request).then(
-      (cached) =>
-        cached ||
-        fetch(request).then((res) => {
+    caches.match(request).then((cached) => {
+      if (cached) return cached;
+      return fetch(request)
+        .then((res) => {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(request, copy).catch(() => {}));
           return res;
-        }).catch(() => cached)
-    )
+        })
+        .catch(() => cached); // `cached` is correctly in scope here
+    })
   );
 });

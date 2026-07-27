@@ -1,5 +1,6 @@
 """Application configuration loaded from environment variables."""
 from functools import lru_cache
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,7 +16,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/sweepstake"
 
     # Auth
-    JWT_SECRET: str = "change-me-in-production"
+    # FIX: default is now empty string instead of a publicly-known placeholder.
+    # A @model_validator below raises at startup if JWT_SECRET is unset in
+    # any non-development environment, preventing silent production insecurity.
+    JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
@@ -44,6 +48,25 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = ""      # e.g. "LuckPot <updates@yourdomain.com>"
     SMTP_USE_TLS: bool = True
+
+    @model_validator(mode="after")
+    def _validate_jwt_secret(self) -> "Settings":
+        """Prevent startup with an empty JWT_SECRET in non-development envs.
+        In production, render.yaml uses generateValue: true which always sets
+        a strong secret. This guard catches misconfigured manual deploys."""
+        if self.ENVIRONMENT != "development" and not self.JWT_SECRET:
+            raise ValueError(
+                "JWT_SECRET must be set in non-development environments. "
+                "Set it as an environment variable on Render (or use "
+                "generateValue: true in render.yaml)."
+            )
+        return self
+
+    @property
+    def effective_jwt_secret(self) -> str:
+        """Returns the JWT secret, falling back to a deterministic dev-only
+        value so local docker-compose / tests work without extra config."""
+        return self.JWT_SECRET or "dev-only-insecure-secret-do-not-use-in-production"
 
     @property
     def email_configured(self) -> bool:
