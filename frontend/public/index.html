@@ -205,8 +205,8 @@ input::placeholder{color:var(--mut)}
    console on load so anyone can confirm exactly what production is serving
    (open DevTools console → look for "LuckPot build"). If this shows an old
    version after a deploy, the deploy/CDN/service-worker hasn't updated yet. */
-const BUILD = "v70 · recompute-action";
-const BUILD_TIME = "2026-06-13";
+const BUILD = "v71 · leaderboard-scoring-fixes";
+const BUILD_TIME = "2026-07-28";
 const $=(s,r=document)=>r.querySelector(s);
 const app=$('#app');
 let dark=true;
@@ -228,7 +228,24 @@ const players=[
 ];
 // allocation: player index -> team index, + stage points
 let alloc=[0,1,2,3,4,5,6,7,8,9]; // teams index per player
-const stagePts={'Group':10,'R32':18,'R16':25,'QF':45,'SF':70,'Final':90,'4th':95,'3rd':100,'Runner-up':110,'Winner':120,'Out':0};
+/* SCORING — must mirror the backend exactly (app/services/tournament.py).
+   A player's leaderboard score is:  stageBonus + matchPoints
+     · stageBonus  = the furthest round their team REACHED (kept even once the
+                     team is knocked out — elimination is a separate flag)
+     · matchPoints = 3 per win, 1 per draw, 0 per loss, over finished matches.
+                     A knockout win on penalties counts as a win.
+   Every bonus band is ≥30 apart — more than anyone can collect in match points
+   — so a better tournament run can never be overtaken on match points alone.
+   NOTE: the backend never sends 'Out' as a stage; it sends the furthest stage
+   reached plus `eliminated: true`. */
+const STAGE_BONUS={'Group':0,'R32':30,'R16':60,'QF':90,'SF':120,'4th':120,
+  '3rd':150,'Final':180,'Runner-up':180,'Winner':210};
+const stageBonus=(st)=>STAGE_BONUS[st]??0;
+/* The bonus ladder as shown in the Board's "How points work" card. Values are
+   read from STAGE_BONUS above so the explanation can never drift from the math. */
+const BONUS_LADDER=[['Group','Group stage'],['R32','Round of 32'],['R16','Round of 16'],
+  ['QF','Quarter-final'],['SF','Semi-final / 4th'],['3rd','3rd place'],
+  ['Final','Final / Runner-up'],['Winner','🏆 Winner']];
 /* World Cup 2026 progress — single source of truth.
    Stage order (each with its own equal-width bar segment):
      Groups → R32 → R16 → QF → SF → 3rd Place → Final
@@ -489,14 +506,45 @@ let MY_ID=null;  // logged-in user's id (to detect league admin)
 /* ---------------- HELPERS ---------------- */
 const T=i=>teams[i]||{n:'TBD',e:'⏳',c:'#888'};  // safe fallback before the draw
 const pool=()=>players.length*sweep.fee;
+/* THE single ranking helper. Everything that shows a position (Board, Home
+   top-3, activity feed) goes through this so they can never disagree.
+   Points come from the backend, which is authoritative: it computes
+   stageBonus + matchPoints and returns rows already ordered by its full
+   tie-break chain (furthest stage → match points → knockout wins → wins →
+   name). We re-sort on points only, falling back to the arrival index for
+   ties, which preserves that backend order exactly. */
 function ranked(){
-  // Use the backend's authoritative points (group base 10 + position bonus, or
-  // knockout stage points). Fall back to the flat stage lookup only when no
-  // backend value is present (e.g. demo mode before a live connection).
-  return players.map((p,i)=>({p,ti:alloc[i],stage:stages[i],
-      pts:(PTS[i]!=null?PTS[i]:(stagePts[stages[i]]??0)),idx:i}))   // ??0: never NaN
-    .sort((a,b)=>b.pts-a.pts||a.idx-b.idx);
+  const rows=players.map((p,i)=>{
+    const stage=stages[i]??null;
+    const bonus=stage?stageBonus(stage):0;
+    // PTS[i] is the authoritative score. Estimate ONLY when it's missing
+    // (participant with no team yet, or demo mode) — and estimate on the same
+    // scale as the backend, so a missing value can never scramble the order.
+    const known=PTS[i]!=null&&!isNaN(PTS[i]);
+    const pts=known?PTS[i]:bonus;
+    const match=known?pts-bonus:null;
+    return {p,ti:alloc[i]??null,stage,pts,bonus,noTeam:alloc[i]==null,
+            match:(match!=null&&match>=0)?match:null,estimated:!known,idx:i};
+  }).sort((a,b)=>b.pts-a.pts||a.idx-b.idx);
+  // Standard competition ranking: equal scores SHARE a position and the next
+  // distinct score skips (1, 1, 3). Rendering tied players as #1 and #2 is what
+  // makes a correct leaderboard look broken.
+  let lastPts=null,lastRank=0;
+  rows.forEach((x,i)=>{
+    if(lastPts===null||x.pts!==lastPts){lastRank=i+1;lastPts=x.pts;}
+    x.rank=lastRank;
+  });
+  const perRank={};
+  rows.forEach(x=>{perRank[x.rank]=(perRank[x.rank]||0)+1;});
+  rows.forEach(x=>{x.tied=perRank[x.rank]>1;});
+  return rows;
 }
+/* Escape untrusted text (usernames, team names from the feed) before it goes
+   into innerHTML. */
+const esc=(s)=>String(s??'').replace(/[&<>"']/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* Escape a value for use inside a single-quoted JS string in an inline handler. */
+const escAttrJs=(s)=>esc(String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
 function toast(msg,icon='🔔'){
   const t=document.createElement('div');t.className='toast';t.innerHTML=`<span>${icon}</span>${msg}`;
   document.body.appendChild(t);setTimeout(()=>{t.style.opacity=0;t.style.transition='.4s';setTimeout(()=>t.remove(),400)},2300);
@@ -550,6 +598,21 @@ let UPDATED_COUNT=0;  // diagnostics: how many elements patched last cycle
 function patchList(container, items, keyFn, htmlFn){
   if(!container)return 0;
   let changed=0;
+  /* Drop any child this reconciler does NOT own — i.e. rows painted straight
+     into innerHTML by a view function, or an empty-state placeholder. They
+     carry no data-key, so the lookup below never finds them and the removal
+     pass at the end used to skip them: the result was that every live update
+     appended a SECOND copy of the whole list (leaderboard rows and fixtures
+     duplicated, and "No messages yet" stuck above real chat). Clearing them
+     first makes the container keyed-only, so reconciliation is exact.
+     Use renderList() instead of a raw innerHTML paint to keep the first render
+     keyed and avoid this rebuild entirely. */
+  Array.from(container.children).forEach(ch=>{
+    if(!ch.getAttribute || ch.getAttribute('data-key')===null) container.removeChild(ch);
+  });
+  // A first paint should keep the CSS stagger animation; later patches must not
+  // re-run it (that's the flicker this whole function exists to avoid).
+  const firstPaint=container.children.length===0;
   const seen=new Set();
   let prev=null;
   // Build/refresh keyed children in order.
@@ -566,7 +629,8 @@ function patchList(container, items, keyFn, htmlFn){
       if(node){
         node.setAttribute('data-key',key);
         node.setAttribute('data-html',html);
-        node.style.animation='none';   // don't re-run the stagger fade on live patches
+        // don't re-run the stagger fade on live patches (first paint keeps it)
+        if(!firstPaint)node.style.animation='none';
         if(prev&&prev.nextSibling)container.insertBefore(node,prev.nextSibling);
         else if(prev)container.appendChild(node);
         else container.insertBefore(node,container.firstChild);
@@ -598,6 +662,24 @@ function patchList(container, items, keyFn, htmlFn){
   });
   return changed;
 }
+/* Paint a list through the SAME reconciler used by live updates, so the first
+   render and every later patch agree on keys. `emptyHtml` is shown (unkeyed,
+   and cleared automatically on the next non-empty patch) when there's nothing
+   to list — without it an emptied list would just render as blank space. */
+function renderList(container, items, keyFn, htmlFn, emptyHtml){
+  if(!container)return 0;
+  if(!items||!items.length){
+    const h=emptyHtml||'';
+    // Cheap signature so an unchanged empty state isn't rewritten every tick
+    // (stashing the whole HTML in the attribute would bloat the DOM).
+    const sig=h.length+'_'+h.split('').reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,0);
+    if(container.getAttribute('data-empty')===sig)return 0;
+    container.innerHTML=h; container.setAttribute('data-empty',sig);
+    return 1;
+  }
+  container.removeAttribute('data-empty');
+  return patchList(container,items,keyFn,htmlFn);
+}
 function liveUpdate(){
   if(!auth)return;
   UPDATED_COUNT=0;
@@ -610,8 +692,7 @@ function liveUpdate(){
   // only the rows whose content changed (no full innerHTML rebuilds).
   if(view==='board'){
     const lb=document.getElementById('lb-list');
-    if(lb){const r=ranked();
-      UPDATED_COUNT+=patchList(lb, r, (x)=>x.p.id||x.p.name, (x,i)=>lbRow(x,i,r));}
+    if(lb&&window.BOARD_MODE!=='pred') UPDATED_COUNT+=paintLeaderboard(lb);
     const pb=document.getElementById('predboard');
     if(pb&&window.BOARD_MODE==='pred'){const h=predBoardHTML();
       if(pb.getAttribute('data-html')!==h){pb.innerHTML=h;pb.setAttribute('data-html',h);UPDATED_COUNT++;}}
@@ -628,6 +709,17 @@ function liveUpdate(){
       const lbls=document.getElementById('home-stage-labels');
       if(lbls){const h=TP.stageStatuses.map(s=>`<span class="${s.status==='active'?'gold':''}" style="${s.status==='done'?'opacity:.55':''};${s.status==='active'?'font-weight:700':''}">${s.label}</span>`).join('');
         if(lbls.getAttribute('data-html')!==h){lbls.innerHTML=h;lbls.setAttribute('data-html',h);UPDATED_COUNT++;}}}
+    // Home's Top Standings used to be painted once and never refreshed, so the
+    // headline ranking on the landing screen went stale while the Board tab
+    // moved. It goes through the same reconciler now.
+    const top3=document.getElementById('home-top3');
+    if(top3)UPDATED_COUNT+=paintLeaderboard(top3,3);
+    const myr=document.getElementById('home-myrank');
+    if(myr){const r=ranked(),mine=r.find(x=>x.p.name===(MY_NAME||'You'));
+      const v=mine?`#${mine.rank}`:'—';
+      if(myr.textContent!==v){myr.textContent=v;UPDATED_COUNT++;}
+      document.querySelectorAll('#home-myrank-inline').forEach(el=>{
+        if(el.textContent!==v){el.textContent=v;UPDATED_COUNT++;}});}
     const act=document.getElementById('home-activity');
     if(act){const h=activityHTML();if(act.getAttribute('data-html')!==h){act.innerHTML=h;act.setAttribute('data-html',h);UPDATED_COUNT++;}}
     const ta=document.getElementById('home-alive');
@@ -639,10 +731,7 @@ function liveUpdate(){
   }
   else if(view==='fixtures'){
     const fl=document.getElementById('fxlist');
-    if(fl&&window.__FX_FILTER__){
-      const data=fxListData(window.__FX_FILTER__);
-      UPDATED_COUNT+=patchList(fl, data, (x)=>x.id||(x.a+x.b), (x)=>fxRowHTML(x));
-    }
+    if(fl)UPDATED_COUNT+=paintFixtures(fl, window.__FX_FILTER__||'upcoming');
   }
   else if(view==='teams'){
     const gt=document.getElementById('grouptables');
@@ -1271,7 +1360,11 @@ function vHome(s){
     return;
   }
   const r=ranked(), myName=MY_NAME||'You', meIdx=players.findIndex(p=>p.name===myName);
-  const me=r.findIndex(x=>x.p.name===myName)+1;
+  // Tie-aware position, and never "#0": findIndex(...)+1 rendered a bogus rank 0
+  // for anyone not on the board (admin who isn't playing, pre-draw joiners).
+  const meRow=r.find(x=>x.p.name===myName);
+  const me=meRow?meRow.rank:0;
+  const meLabel=meRow?`#${meRow.rank}`:'—';
   // A team is only "mine" if I'm a player AND a team has actually been allocated.
   const hasTeam = meIdx>=0 && alloc[meIdx]!=null && teams[alloc[meIdx]];
   const meTeam = hasTeam ? T(alloc[meIdx]) : null;
@@ -1305,9 +1398,9 @@ function vHome(s){
         </div>
         <div class="row">
           <div class="flag">${flagImg(meTeam.n,26)}</div>
-          <div style="flex:1"><div style="font-size:19px;font-weight:700">${meTeam.n}</div>
-            <div class="mut" style="font-size:13px">You're currently <b class="gold">#${me}</b> of ${players.length}</div></div>
-          <div style="text-align:right"><div class="mono gold" style="font-size:26px;font-weight:700">#${me}</div></div>
+          <div style="flex:1"><div style="font-size:19px;font-weight:700">${esc(meTeam.n)}</div>
+            <div class="mut" style="font-size:13px">You're currently <b class="gold" id="home-myrank-inline">${meLabel}</b> of ${players.length}</div></div>
+          <div style="text-align:right"><div class="mono gold" style="font-size:26px;font-weight:700" id="home-myrank">${meLabel}</div></div>
         </div>
       </div>`
     : `<div class="card glow" style="text-align:center">
@@ -1359,8 +1452,7 @@ function vHome(s){
     </div>
 
     <div class="between"><div class="label">Top Standings</div><span class="gold" style="font-size:13px;font-weight:700;cursor:pointer" onclick="view='board';render()">View all →</span></div>
-    ${r.length?r.slice(0,3).map((x,i)=>lbRow(x,i,r)).join('')
-      :'<div class="card mut" style="text-align:center;font-size:13px">No standings yet — run the draw to assign teams.</div>'}
+    <div id="home-top3" style="display:flex;flex-direction:column"></div>
 
     <div class="between" style="margin-top:4px"><div class="label">Recent Activity</div></div>
     <div id="home-activity">${activityHTML()}</div>
@@ -1374,6 +1466,7 @@ function vHome(s){
 
     <button class="btn gold" onclick="openInvite()">＋ Invite Friends</button>
   </div>`;
+  paintLeaderboard($('#home-top3'), 3);   // keyed first paint; liveUpdate patches it
 }
 
 /* Recent activity: a LIVE feed built from things we already receive in real
@@ -1399,17 +1492,23 @@ function activityFromComment(c){
     kind:'chat',
   });
 }
-/* Compare a fresh leaderboard to the last one and log anyone who climbed. */
-function activityFromLeaderboard(board){
-  if(!Array.isArray(board))return;
+/* Log anyone who climbed since the last board we saw. Call this AFTER
+   applyLeaderboard() — it reads the ranking the UI actually renders, via
+   ranked(), so "climbed to #3" always matches the number on screen. It used to
+   rank by raw array position and key by username: positions ignored ties, and
+   two players sharing a name overwrote each other's history. */
+function noteRankChanges(){
+  const rows=ranked();
+  if(!rows.length)return;
   const ranks={};
-  board.forEach((r,i)=>{ranks[r.participant_name]=i+1;});
+  rows.forEach(x=>{ranks[String(x.p.id||x.p.name)]=x.rank;});
   if(LAST_RANKS){
-    // Find the biggest climber (smallest rank number now vs before).
+    // Biggest climber = largest drop in rank number.
     let best=null;
-    board.forEach((r,i)=>{
-      const now=i+1, was=LAST_RANKS[r.participant_name];
-      if(was&&now<was){ const gain=was-now; if(!best||gain>best.gain)best={name:r.participant_name,now,gain,team:r.team_name,pts:r.points}; }
+    rows.forEach(x=>{
+      const was=LAST_RANKS[String(x.p.id||x.p.name)], now=x.rank;
+      if(was&&now<was){const gain=was-now;
+        if(!best||gain>best.gain)best={name:x.p.name,now,gain,team:(teams[x.ti]||{}).n,pts:x.pts};}
     });
     if(best){
       pushActivity({
@@ -1421,15 +1520,15 @@ function activityFromLeaderboard(board){
       });
     }
   }
-  LAST_RANKS=ranks;
+  LAST_RANKS=ranks;   // null on first sight → seeds the baseline, no false climb
 }
 
 function activityHTML(){
   if(LIVE && ACTIVITY_FEED.length){
     return ACTIVITY_FEED.slice(0,2).map(n=>`<div class="notif">
       <div class="ni" style="background:${n.kind==='climb'?'#2fe28a1f;color:#2fe28a':(n.icon==='⚽'?'#ffc83d1f;color:#ffc83d':'#4d8dff1f;color:#4d8dff')}">${n.icon||'⚽'}</div>
-      <div style="flex:1"><div style="font-weight:600;font-size:14px">${n.title||''}</div>
-        <div class="mut" style="font-size:12px">${(n.body||'').replace(/</g,'&lt;')}</div></div>
+      <div style="flex:1"><div style="font-weight:600;font-size:14px">${esc(n.title||'')}</div>
+        <div class="mut" style="font-size:12px">${esc(n.body||'')}</div></div>
       <div class="mut" style="font-size:11px">${timeAgo(n.ts)}</div></div>`).join('');
   }
   if(LIVE && Array.isArray(LIVE_ACTIVITY) && LIVE_ACTIVITY.length){
@@ -1468,8 +1567,13 @@ async function loadActivity(){
 /* ---------------- LEADERBOARD ---------------- */
 function badgesFor(x,i,r){
   const out=[];
-  if(i===0&&r.length>1)out.push(['👑','Top of the league']);
-  if(i===r.length-1&&r.length>2)out.push(['🥄','Wooden Spoon — bottom of the table']);
+  // Badges follow RANK, not row position — so joint leaders both get the crown
+  // and a shared last place gets no wooden spoon (nobody is uniquely bottom).
+  const rank=x.rank||i+1;
+  if(x.noTeam)return '';   // nothing to celebrate or mock before they have a team
+  const last=r.length?Math.max(...r.filter(y=>!y.noTeam).map(y=>y.rank||0)):0;
+  if(rank===1&&r.length>1)out.push(['👑','Top of the league']);
+  if(rank===last&&r.length>2&&!x.tied)out.push(['🥄','Wooden Spoon — bottom of the table']);
   if(x.ti!=null&&teams[x.ti]){
     const rank=(window.RANKED_POOL||[]).findIndex(t=>t.name===teams[x.ti].n)+1;
     if(rank===1)out.push(['🍀','Lucky draw — got the favourite']);
@@ -1479,6 +1583,7 @@ function badgesFor(x,i,r){
 }
 function lbRow(x,i,allRanked){
   const t=T(x.ti), me=x.p.name===(MY_NAME||'You');
+  const rank=x.rank||i+1;
   const badges=badgesFor(x,i,allRanked||[]);
   /* Stage tag semantics (backend sends the FURTHEST stage + eliminated flag):
        Winner/Runner-up/3rd/4th → final placement; eliminated → OUT·<stage they
@@ -1487,20 +1592,68 @@ function lbRow(x,i,allRanked){
                 '3rd':['win','🥉 3RD'],'4th':['out','4TH']};
   const elim=(x.p&&x.p.elim)||x.stage==='Out';
   const tag = FINISH[x.stage]?`<span class="tag ${FINISH[x.stage][0]}">${FINISH[x.stage][1]}</span>`
-    : elim?`<span class="tag out">OUT${(x.stage&&x.stage!=='Group'&&x.stage!=='Out')?' · '+x.stage:''}</span>`
-    : (x.stage&&x.stage!=='Group')?`<span class="tag live">${x.stage}</span>`
+    : elim?`<span class="tag out">OUT${(x.stage&&x.stage!=='Group'&&x.stage!=='Out')?' · '+esc(x.stage):''}</span>`
+    : (x.stage&&x.stage!=='Group')?`<span class="tag live">${esc(x.stage)}</span>`
     : '';   // group stage / no draw → no tag clutter
-  const pts = (x.pts!=null && !isNaN(x.pts)) ? x.pts : '–';
+  const hasPts = x.pts!=null && !isNaN(x.pts);
+  const pts = hasPts ? x.pts : '–';
+  // Show WHERE the score came from — the single biggest source of "the points
+  // look wrong" confusion is a 180-point stage bonus with no visible origin.
+  const breakdown = x.noTeam
+    ? 'No team yet — scoring starts once the draw assigns one'
+    : (hasPts && x.match!=null)
+      ? `${x.bonus} stage bonus + ${x.match} match ${x.match===1?'point':'points'}`
+      : (x.estimated ? 'Estimated — no score from the server yet' : 'Points');
   const rec=(x.p.wins!=null)?`<span class="rec">${x.p.wins}W·${x.p.draws}D·${x.p.losses}L</span>`:'';
-  return `<div class="lb ${i<3?'r'+(i+1):''} ${me?'me':''}">
-    <div class="pos">${i+1}</div>
-    <div class="avatar" style="background:${x.p.col};width:36px;height:36px;font-size:14px">${x.p.av}</div>
+  // Tied players share a position; mark it so "two #2s" reads as deliberate.
+  const posLabel = x.tied ? `=${rank}` : rank;
+  return `<div class="lb ${rank<=3?'r'+rank:''} ${me?'me':''}">
+    <div class="pos" title="${x.tied?'Joint '+rank+(rank===1?'st':rank===2?'nd':rank===3?'rd':'th'):''}">${posLabel}</div>
+    <div class="avatar" style="background:${esc(x.p.col)};width:36px;height:36px;font-size:14px">${esc(x.p.av)}</div>
     <div style="flex:1;min-width:0">
-      <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:6px">${x.p.name}${me?' <span class="gold" style="font-size:10px;font-weight:700">YOU</span>':''}${badges}</div>
-      <div class="row" style="gap:6px;font-size:12px;color:var(--mut2);margin-top:1px">${flagImg(t.n,15)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.n}</span>${rec?'· '+rec:''}</div>
+      <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:6px">${esc(x.p.name)}${me?' <span class="gold" style="font-size:10px;font-weight:700">YOU</span>':''}${badges}</div>
+      <div class="row" style="gap:6px;font-size:12px;color:var(--mut2);margin-top:1px">${flagImg(t.n,15)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.n)}</span>${rec?'· '+rec:''}</div>
     </div>
     ${tag}
-    <div class="pts">${pts}</div>
+    <div class="pts" title="${esc(breakdown)}">${pts}</div>
+  </div>`;
+}
+const LB_EMPTY_HTML='<div class="card mut" style="text-align:center;font-size:13px">No standings yet — run the draw to assign teams.</div>';
+/* Paint (or live-patch) a leaderboard container. `limit` renders only the top N
+   rows but still ranks against the FULL field, so Home's top-3 can't hand out a
+   wooden spoon to 3rd place. Used by both the first render and liveUpdate(). */
+function paintLeaderboard(container, limit){
+  if(!container)return 0;
+  const r=ranked();
+  const rows=limit?r.slice(0,limit):r;
+  return renderList(container, rows, (x)=>x.p.id||x.p.name, (x,i)=>lbRow(x,i,r), LB_EMPTY_HTML);
+}
+/* The scoring explainer, generated from STAGE_BONUS so it can never drift from
+   the numbers actually used to rank people. */
+function scoringCardHTML(){
+  const ladder=BONUS_LADDER.map(([k,label])=>{
+    const v=STAGE_BONUS[k]??0;
+    return `<div class="between ${k==='Winner'?'':'mut'}" style="${k==='Winner'?'color:var(--gold)':''}"><span>${label}</span><span class="mono">${v?'+'+v:'0'}</span></div>`;
+  }).join('');
+  return `<div class="card" style="font-size:12px">
+    <div class="label" style="margin-bottom:8px">How points work</div>
+    <div class="meta" style="font-size:12.5px;line-height:1.55;margin-bottom:12px">
+      Your score is <b class="gold">stage bonus + match points</b>. The stage bonus is for the
+      furthest round your team <b>reaches</b> — you keep it even after they're knocked out.
+    </div>
+    <div class="label" style="font-size:9px;margin-bottom:6px">Match points · every finished match</div>
+    <div class="between"><span class="gold">Win</span><span class="mono gold">+3</span></div>
+    <div class="between mut"><span>Draw</span><span class="mono">+1</span></div>
+    <div class="between mut"><span>Loss</span><span class="mono">0</span></div>
+    <div class="label" style="font-size:9px;margin:14px 0 6px">Stage bonus · furthest round reached</div>
+    ${ladder}
+    <div class="mut" style="font-size:11px;margin-top:12px;line-height:1.55">
+      A knockout win on penalties counts as a win. Every bonus band is at least 30 apart —
+      more than anyone can earn in match points — so a better run always outranks a better
+      record. Level on points? The tie is broken by furthest stage, then match points, then
+      knockout wins, then wins; players who stay level share the position (shown as <b>=2</b>).
+      Tap and hold a score to see its breakdown.
+    </div>
   </div>`;
 }
 function todayDigestHTML(){
@@ -1653,16 +1806,14 @@ window.toggleChatNotifs=async()=>{
 };
 function renderChatList(){
   const el=$('#chatlist'); if(!el)return;
-  if(!(Array.isArray(COMMENTS)&&COMMENTS.length)){
-    const empty='<div class="mut" style="text-align:center;font-size:13px;padding:14px">No messages yet — say hi! 👋</div>';
-    if(el.getAttribute('data-empty')!=='1'){el.innerHTML=empty;el.setAttribute('data-empty','1');}
-    return;
-  }
-  el.removeAttribute('data-empty');
   // Only auto-scroll if the user is already near the bottom (don't yank them up
   // while they're reading older messages).
   const atBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < 60;
-  const n=patchList(el, COMMENTS, (c)=>c.id||c.created_at, (c)=>chatRowHTML(c));
+  // renderList() owns the empty state, so the "No messages yet" placeholder is
+  // cleared the moment a real message arrives (it used to linger below them).
+  const n=renderList(el, Array.isArray(COMMENTS)?COMMENTS:[], (c)=>c.id||c.created_at,
+    (c)=>chatRowHTML(c),
+    '<div class="mut" style="text-align:center;font-size:13px;padding:14px">No messages yet — say hi! 👋</div>');
   if(n>0 && atBottom) el.scrollTop=el.scrollHeight;
 }
 
@@ -1678,10 +1829,18 @@ function vPredBoard(s){
 function predBoardHTML(){
   if(!Array.isArray(PRED_BOARD))return '<div class="card mut" style="text-align:center;font-size:13px">Loading…</div>';
   if(!PRED_BOARD.length)return '<div class="card mut" style="text-align:center;font-size:13px">No predictions yet — be the first! Tap a match in the Matches tab.</div>';
-  return PRED_BOARD.map((r,i)=>`<div class="lb ${i<3?'r'+(i+1):''} ${r.username===(MY_NAME||'')?'me':''}" style="cursor:pointer" onclick="openPredHistory('${r.user_id||''}','${(r.username||'').replace(/'/g,"\\'")}')">
-    <div class="pos">${i+1}</div>
-    <div class="avatar" style="background:${r.avatar_color};width:36px;height:36px;font-size:14px">${(r.username||'P').slice(0,2).toUpperCase()}</div>
-    <div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px">${r.username}${r.username===(MY_NAME||'')?' <span class="gold" style="font-size:10px">YOU</span>':''}</div>
+  // Ranks here come straight from the backend's ordering; tied point totals
+  // share a position, same rule as the main board.
+  let lastPts=null,lastRank=0;
+  const ranks=PRED_BOARD.map((r,i)=>{
+    if(lastPts===null||r.points!==lastPts){lastRank=i+1;lastPts=r.points;}
+    return lastRank;
+  });
+  const tiedAt=(rk)=>ranks.filter(x=>x===rk).length>1;
+  return PRED_BOARD.map((r,i)=>`<div class="lb ${ranks[i]<=3?'r'+ranks[i]:''} ${r.username===(MY_NAME||'')?'me':''}" style="cursor:pointer" onclick="openPredHistory('${escAttrJs(r.user_id||'')}','${escAttrJs(r.username||'')}')">
+    <div class="pos">${tiedAt(ranks[i])?'='+ranks[i]:ranks[i]}</div>
+    <div class="avatar" style="background:${esc(r.avatar_color)};width:36px;height:36px;font-size:14px">${esc(String(r.username||'P').slice(0,2).toUpperCase())}</div>
+    <div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px">${esc(r.username)}${r.username===(MY_NAME||'')?' <span class="gold" style="font-size:10px">YOU</span>':''}</div>
       <div class="meta" style="font-size:11px">🎯 ${r.exact} exact · ✓ ${r.results} results${r.total?` · ${r.total} picks`:''}</div></div>
     <div style="text-align:right"><div class="pts" style="font-size:18px">${r.points}</div><div class="meta" style="font-size:10px;white-space:nowrap">view picks ›</div></div>
   </div>`).join('');
@@ -1726,26 +1885,23 @@ window.openPredHistory=async(uid,name)=>{
 };
 function vBoard(s){
   const r=ranked();
-  const drawn = alloc.length>0 && teams.length>0; // a draw has happened
+  const drawn = alloc.some(a=>a!=null) && teams.length>0; // a draw has happened
+  // Predictions is a separate side game — keep it reachable even before anyone
+  // has joined the main board (this check used to run first and blocked it).
+  if(window.BOARD_MODE==='pred'){ vPredBoard(s); return; }
   if(LIVE && players.length===0){
-    s.innerHTML=`<div class="fade" style="padding-top:40px;text-align:center">
+    s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:40px;text-align:center">
       <h2 style="font-size:24px;margin-bottom:10px">Leaderboard</h2>
-      <p class="mut" style="font-size:14px">No one's joined yet. Share your invite code to get people in.</p></div>`;
+      <p class="mut" style="font-size:14px">No one's joined yet. Share your invite code to get people in.</p>
+      <div class="seg"><button class="on">Standings</button><button onclick="window.BOARD_MODE='pred';render()">🔮 Predictions</button></div></div>`;
     return;
   }
-  if(window.BOARD_MODE==='pred'){ vPredBoard(s); return; }
   s.innerHTML=`<div class="fade" style="display:flex;flex-direction:column;gap:12px;padding-top:4px">
     <h2 style="font-size:24px">Leaderboard</h2>
     <div class="seg"><button class="on" onclick="window.BOARD_MODE='main';render()">Standings</button><button onclick="window.BOARD_MODE='pred';render()">🔮 Predictions</button></div>
     <div class="card" style="padding:13px"><div class="between"><span class="mut" style="font-size:13px">${drawn?'Live ranking · updates as results come in':`${players.length} joined · teams assigned at the draw`}</span><span class="live"><span class="dot"></span>${drawn?'LIVE':players.length+' IN'}</span></div></div>
-    <div class="stagger" id="lb-list">${r.map((x,i)=>lbRow(x,i,r)).join('')}</div>
-    <div class="card" style="font-size:12px">
-      <div class="label" style="margin-bottom:8px">Scoring — by match result</div>
-      <div class="between"><span class="gold">Win</span><span class="mono gold">+3 pts</span></div>
-      <div class="between mut"><span>Draw</span><span class="mono">+1 pt</span></div>
-      <div class="between mut"><span>Loss</span><span class="mono">0 pts</span></div>
-      <div class="mut" style="font-size:11px;margin-top:8px;line-height:1.5">Everyone starts at 0. Your team earns points every match, all tournament long. In the knockouts, a penalty-shootout win counts as a win.</div>
-    </div>
+    <div class="stagger" id="lb-list"></div>
+    ${scoringCardHTML()}
 
     <div class="between" style="margin-top:6px"><div class="label">League Chat</div><span style="font-size:13px;cursor:pointer" onclick="toggleChatNotifs()" title="Enable notifications">🔔 <span class="mut" style="font-size:11px">notify me</span></span></div>
     <div class="card" style="padding:12px">
@@ -1760,6 +1916,7 @@ function vBoard(s){
       </div>
     </div>
   </div>`;
+  paintLeaderboard($('#lb-list'));   // keyed first paint → live patches reconcile
   renderChatList();
   if(LIVE && COMMENTS===null){ loadComments().then(renderChatList); }
 }
@@ -1964,20 +2121,23 @@ function vFixtures(s){
     <div class="seg" id="fxseg">
       <button class="on" data-f="upcoming">Upcoming</button><button data-f="live">Live</button><button data-f="done">Results</button>${_hasMyTeam()?'<button data-f="mine">My team</button>':'<button data-f="all">All</button>'}
     </div>
-    <div id="fxlist" class="stagger" style="display:flex;flex-direction:column;gap:9px">${fxList(window.__FX_FILTER__||'upcoming')}</div>
+    <div id="fxlist" class="stagger" style="display:flex;flex-direction:column;gap:9px"></div>
   </div>`;
   if(!window.__FX_FILTER__)window.__FX_FILTER__='upcoming';
+  paintFixtures($('#fxlist'), window.__FX_FILTER__);
   // restore the active segment highlight to the remembered filter
   document.querySelectorAll('#fxseg button').forEach(x=>{x.classList.toggle('on',x.dataset.f===window.__FX_FILTER__);});
   document.querySelectorAll('#fxseg button').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('#fxseg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
     window.__FX_FILTER__=b.dataset.f;
-    $('#fxlist').innerHTML=fxList(b.dataset.f);
+    // Switching filter changes the whole set — clear first so the reconciler
+    // isn't asked to diff two unrelated lists.
+    const el=$('#fxlist'); if(el)el.innerHTML='';
+    paintFixtures(el, b.dataset.f);
   });
   // Fetch real fixtures in the background and re-render when they arrive.
   if(LIVE && LIVE_FIXTURES===null){
-    loadFixtures().then(()=>{const el=$('#fxlist');if(el)el.innerHTML=fxList(
-      (document.querySelector('#fxseg button.on')||{}).dataset?.f||'upcoming');});
+    loadFixtures().then(()=>paintFixtures($('#fxlist'), window.__FX_FILTER__||'upcoming'));
   }
 }
 window.openMatch=(fid)=>{
@@ -2197,13 +2357,19 @@ function fxRowHTML(x){
       <div class="fxteam r"><span>${x.b}</span><span style="flex:none;display:inline-flex">${flagImg(x.b,20)}</span></div>
     </div>`;
 }
-function fxList(f){
-  const list=fxListData(f);
+function fxEmptyHTML(f){
   const usingLive = LIVE && Array.isArray(LIVE_FIXTURES);
-  if(!list.length)return `<div class="card mut" style="text-align:center;font-size:13px">${
+  return `<div class="card mut" style="text-align:center;font-size:13px">${
     usingLive?(f==='upcoming'?'No upcoming matches scheduled yet.':f==='done'?'No results yet — check back once matches are played.':f==='live'?'No matches are live right now.':f==='mine'?'No fixtures found for your team yet — they appear once the schedule is published.':'No matches yet — fixtures appear once the schedule is published.')
     :'No matches in this view.'}</div>`;
-  return list.map(fxRowHTML).join('');
+}
+/* Paint (or live-patch) the fixtures list through the shared reconciler, so the
+   first render is keyed and later updates replace rows instead of appending a
+   duplicate set. */
+function paintFixtures(container, f){
+  if(!container)return 0;
+  return renderList(container, fxListData(f), (x)=>x.id||(x.a+x.b),
+                    (x)=>fxRowHTML(x), fxEmptyHTML(f));
 }
 
 /* ---------------- ADMIN ---------------- */
@@ -2823,29 +2989,53 @@ function applyLeaderboard(rows){
   // Only the leaderboard (post-draw) carries team/stage data. If it's empty
   // (no draw yet), keep the participant list we already loaded — don't wipe it.
   if(!rows||!rows.length){alloc.length=0;stages.length=0;PTS.length=0;return;}
-  players.length=0; alloc.length=0; stages.length=0; PTS.length=0;
+  /* MERGE, don't replace. The backend's leaderboard only contains participants
+     who HAVE an allocation, and its rows carry fewer fields than the league
+     detail does. Rebuilding players[] from it outright meant:
+       · anyone without a team yet (joined after the draw, or a draw still in
+         progress) vanished — so the player count, prize pool and the admin's
+         payment list all silently under-counted;
+       · fields the board doesn't send (email, and anything else applySweepstake
+         loaded) were lost until the next full league refresh.
+     So: index what we already have by participant id, overlay the board's data,
+     then re-append anyone the board didn't mention with no team/points. */
+  const prev={}; players.forEach(p=>{prev[String(p.id)]=p;});
+  const seen=new Set();
+  const nextPlayers=[], nextAlloc=[], nextStages=[], nextPts=[];
   rows.forEach((row)=>{
     let ti=teams.findIndex(t=>t.n===row.team_name);
     if(ti<0){teams.push({n:row.team_name,e:row.flag_emoji,c:'#888'});ti=teams.length-1}
-    players.push({id:row.participant_id,name:row.participant_name,
-      av:row.participant_name.slice(0,2).toUpperCase(),col:row.avatar_color,
+    const id=String(row.participant_id);
+    seen.add(id);
+    nextPlayers.push({...(prev[id]||{}),
+      id:row.participant_id,name:row.participant_name,
+      av:String(row.participant_name||'P').slice(0,2).toUpperCase(),col:row.avatar_color,
       wins:row.wins,draws:row.draws,losses:row.losses,
       elim:!!row.eliminated});          // needed to tell "out at R16" from "in R16"
-    alloc.push(ti); stages.push(row.stage);
-    PTS.push(row.points);   // authoritative points from the backend (bonus + match)
+    nextAlloc.push(ti); nextStages.push(row.stage);
+    nextPts.push(row.points);   // authoritative points from the backend (bonus + match)
   });
+  // Participants with no allocation are absent from the board — keep them so
+  // counts and money stay right. They rank last on 0 with no team shown.
+  players.forEach(p=>{
+    if(seen.has(String(p.id)))return;
+    nextPlayers.push({...p,wins:null,draws:null,losses:null,elim:false});
+    nextAlloc.push(null); nextStages.push(null); nextPts.push(null);
+  });
+  players.length=0; players.push(...nextPlayers);
+  alloc.length=0;   alloc.push(...nextAlloc);
+  stages.length=0;  stages.push(...nextStages);
+  PTS.length=0;     PTS.push(...nextPts);
 }
 async function refreshLive(){
   if(!LIVE||!SID)return;
   try{
     const board=await apiReq(`/sweepstakes/${SID}/leaderboard`);
-    // Seed the climb baseline the first time we see a board (no false "climb"
-    // on initial load), then keep it updated on subsequent refreshes.
-    if(Array.isArray(board)&&board.length){
-      if(LAST_RANKS===null){LAST_RANKS={};board.forEach((r,i)=>{LAST_RANKS[r.participant_name]=i+1;});}
-      else{activityFromLeaderboard(board);}
-    }
-    applyLeaderboard(board);liveUpdate();
+    applyLeaderboard(board);
+    // Then diff the ranking. noteRankChanges() seeds its own baseline the first
+    // time, so the initial load never reports a phantom "climb".
+    if(Array.isArray(board)&&board.length)noteRankChanges();
+    liveUpdate();
   }
   catch(e){console.warn('refresh failed',e)}
 }
@@ -2961,7 +3151,19 @@ function startLive(sid){
     ws=new WebSocket(`${base}/ws/sweepstakes/${sid}`);
     ws.onmessage=e=>{try{const m=JSON.parse(e.data);
       LAST_EVENT_AT=new Date().toISOString();
-      if(m.event==='leaderboard_updated'&&m.data.leaderboard){activityFromLeaderboard(m.data.leaderboard);applyLeaderboard(m.data.leaderboard);loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();});}
+      if(m.event==='leaderboard_updated'){
+        // The server sends the full board with most of these events, but some
+        // (e.g. a league settings change) broadcast an EMPTY payload. Those used
+        // to be dropped on the floor, leaving every other client stale until a
+        // poll tick — so fall back to pulling the board ourselves.
+        if(m.data&&m.data.leaderboard){
+          applyLeaderboard(m.data.leaderboard);
+          noteRankChanges();
+          loadFixtures().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();});
+        }else{
+          refreshLive().then(()=>{LAST_REFRESH_AT=new Date().toISOString();liveUpdate();});
+        }
+      }
       else if(m.event==='participant_joined'){
         if(m.data&&m.data.username)toast(`${m.data.username} joined!`,'👋');
         refreshSweepstake();   // re-fetch real participant list → count updates
@@ -3003,7 +3205,12 @@ let MY_LEAGUES=[];        // all sweepstakes the user is in (summary list)
 
 /* Clear the hardcoded demo data so a freshly signed-in user starts clean. */
 function clearDemoData(){
-  players.length=0; alloc.length=0; stages.length=0; PAID_BY_ID={}; PAID_DRAFT=null; PAID_SAVED_AT=null;
+  // teams[] and PTS[] must be cleared too: alloc[] holds INDEXES into teams[],
+  // so demo entries (or another league's teams) left behind meant stale rows
+  // could resolve to the wrong team and made "a draw has happened" look true.
+  players.length=0; alloc.length=0; stages.length=0; teams.length=0; PTS.length=0;
+  window.BOARD_MODE='main';
+  PAID_BY_ID={}; PAID_DRAFT=null; PAID_SAVED_AT=null;
   HAS_SWEEPSTAKE=false; CUR_SWEEP=null; LIVE_FIXTURES=null; LIVE_ACTIVITY=null; COMMENTS=null; MY_PREDS=null; PRED_BOARD=null; STANDINGS=null; ACTIVITY_FEED=[]; LAST_RANKS=null;
 }
 

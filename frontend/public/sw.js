@@ -3,6 +3,10 @@
  * shows up immediately (no more "I changed it but the old version loads").
  * Only static assets fall back to cache; API writes/sockets always bypass.
  *
+ * v6 changes (leaderboard scoring fixes):
+ *  - CACHE version bumped to v73 so the corrected leaderboard/scoring code
+ *    replaces any cached copy of the old app shell on activate.
+ *
  * v5 changes (public-deployment-audit):
  *  - CACHE version bumped from v71 to v72 (clears old caches on activate)
  *  - Fixed stale-cache fallback bug: in the cache-first static branch the
@@ -12,7 +16,7 @@
  *    `cached` in a local const before entering the fetch chain so the
  *    fallback correctly returns the cached response on network failure.
  */
-const CACHE = "luckpot-v72";
+const CACHE = "luckpot-v73";
 
 self.addEventListener("install", () => self.skipWaiting());
 
