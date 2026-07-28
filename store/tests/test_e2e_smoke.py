@@ -144,7 +144,7 @@ def test_add_to_cart_updates_the_badge(shop):
 
 
 def test_cart_totals_are_correct(shop):
-    """Two mugs at £9.99 plus one scarf at £14.50 must total £34.48."""
+    """Two mugs at £9.99 plus a scarf at £14.50 is £34.48, plus £4.99 shipping."""
     mug = shop.locator(".card", has_text="Team Mug").locator(".add")
     mug.click()
     mug.click()
@@ -152,20 +152,24 @@ def test_cart_totals_are_correct(shop):
 
     shop.locator("#openCart").click()
     expect(shop.locator("#drawer")).to_have_class("drawer open")
-    expect(shop.locator("#total")).to_have_text("£34.48")
+    expect(shop.locator("#subtotal")).to_have_text("£34.48")
+    expect(shop.locator("#shipping")).to_have_text("£4.99")
+    expect(shop.locator("#total")).to_have_text("£39.47")
 
 
 def test_quantity_controls_and_removal(shop):
     shop.locator(".card", has_text="Team Mug").locator(".add").click()
     shop.locator("#openCart").click()
 
-    expect(shop.locator("#total")).to_have_text("£9.99")
+    expect(shop.locator("#subtotal")).to_have_text("£9.99")
+    expect(shop.locator("#total")).to_have_text("£14.98")     # + £4.99 shipping
 
     shop.locator(".qty button", has_text="+").click()
-    expect(shop.locator("#total")).to_have_text("£19.98")
+    expect(shop.locator("#subtotal")).to_have_text("£19.98")
+    expect(shop.locator("#total")).to_have_text("£24.97")
 
     shop.locator(".qty button", has_text="−").click()
-    expect(shop.locator("#total")).to_have_text("£9.99")
+    expect(shop.locator("#subtotal")).to_have_text("£9.99")
 
     shop.locator(".rm").click()
     expect(shop.locator("#drawerBody")).to_contain_text("Your cart is empty")
@@ -181,7 +185,7 @@ def test_cart_survives_a_page_refresh(shop):
 
     expect(shop.locator("#cartCount")).to_have_text("1")
     shop.locator("#openCart").click()
-    expect(shop.locator("#total")).to_have_text("£9.99")
+    expect(shop.locator("#subtotal")).to_have_text("£9.99")
 
 
 def test_product_detail_opens(shop):
@@ -190,14 +194,72 @@ def test_product_detail_opens(shop):
     expect(shop.locator("#drawerBody .price")).to_have_text("£9.99")
 
 
-def test_checkout_is_visibly_not_ready_yet(shop):
-    """Phase 1 has no payment. The button must say so rather than fail silently."""
+def test_checkout_says_so_when_stripe_is_not_configured(shop):
+    """This test server has no Stripe keys, so the button must say so plainly
+    rather than looking clickable and then failing."""
     shop.locator(".card", has_text="Team Mug").locator(".add").click()
     shop.locator("#openCart").click()
     expect(shop.locator("#checkout")).to_be_disabled()
-    expect(shop.locator(".soon")).to_contain_text("Phase 2")
+    expect(shop.locator("#payNote")).to_contain_text("aren't switched on")
 
 
 def test_deep_link_to_a_product(shop, live_server):
     shop.goto(f"{live_server}/product/team-mug", wait_until="networkidle")
     expect(shop.locator("#drawerBody")).to_contain_text("Team Mug")
+
+
+# --------------------------------------------------------------------------
+# Checkout, order tracking and the pages Stripe returns customers to
+# --------------------------------------------------------------------------
+
+def test_cart_asks_for_an_email(shop):
+    shop.locator(".card", has_text="Team Mug").locator(".add").click()
+    shop.locator("#openCart").click()
+    expect(shop.locator("#email")).to_be_visible()
+    expect(shop.locator("label[for=email]")).to_contain_text("receipt")
+
+
+def test_track_order_link_reaches_the_lookup_page(shop):
+    shop.locator(".navlink", has_text="Track order").click()
+    expect(shop.locator("h1")).to_contain_text("Find your order")
+    expect(shop.locator("#num")).to_be_visible()
+    expect(shop.locator("#email")).to_be_visible()
+
+
+def test_order_lookup_needs_both_fields(page, live_server):
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{live_server}/orders", wait_until="networkidle")
+
+    page.locator("#find").click()
+    expect(page.locator("#err")).to_contain_text("both")
+
+    page.locator("#num").fill("ORD-ABCD2345")
+    page.locator("#email").fill("nobody@example.com")
+    page.locator("#find").click()
+    expect(page.locator("#err")).to_contain_text("couldn't find")
+
+    assert not errors, f"JavaScript errors: {errors}"
+
+
+def test_thanks_page_survives_no_session_id(page, live_server):
+    """Someone visiting /thanks directly must get a sensible page, not a crash."""
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{live_server}/thanks", wait_until="networkidle")
+
+    expect(page.locator("h1")).to_contain_text("Thank you")
+    expect(page.locator(".btn")).to_contain_text("Back to the shop")
+    assert not errors, f"JavaScript errors: {errors}"
+
+
+def test_cancelled_payment_keeps_the_cart(page, live_server):
+    """Returning from a cancelled Stripe payment must not lose the basket."""
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(live_server, wait_until="networkidle")
+    page.locator(".card", has_text="Team Mug").locator(".add").click()
+
+    page.goto(f"{live_server}/?checkout=cancelled", wait_until="networkidle")
+    expect(page.locator("#cartCount")).to_have_text("1")
+    assert not errors, f"JavaScript errors: {errors}"

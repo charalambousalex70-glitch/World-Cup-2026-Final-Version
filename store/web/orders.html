@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Find your order</title>
+<style>
+  :root{--bg:#fbfbfc;--surface:#fff;--ink:#16181d;--muted:#6b7280;--line:#e5e7eb;
+        --accent:#1f6feb;--ok:#0f7b3f;
+        --shadow:0 1px 3px rgba(16,24,40,.06),0 6px 18px rgba(16,24,40,.05)}
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0f1115;--surface:#171a21;--ink:#e8eaed;--muted:#9aa3af;
+          --line:#262b35;--accent:#4c8dff;--ok:#4ade80;
+          --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 18px rgba(0,0,0,.3)}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:560px;margin:0 auto;padding:48px 20px}
+  a.home{color:var(--muted);text-decoration:none;font-size:.9rem}
+  h1{font-size:1.5rem;margin:16px 0 6px}
+  .sub{color:var(--muted);margin:0 0 24px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+        padding:26px;box-shadow:var(--shadow)}
+  label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:6px}
+  input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;
+        background:var(--bg);color:var(--ink);font:inherit;margin-bottom:16px}
+  input:focus{outline:2px solid var(--accent);outline-offset:1px}
+  button{width:100%;background:var(--accent);color:#fff;border:0;border-radius:10px;
+         padding:14px;font:inherit;font-weight:600;cursor:pointer}
+  button[disabled]{opacity:.6;cursor:not-allowed}
+  .err{background:#fde8e8;color:#9b1c1c;border-radius:10px;padding:12px;
+       font-size:.88rem;margin-bottom:16px}
+  @media (prefers-color-scheme:dark){.err{background:#3b1d1d;color:#f8b4b4}}
+  .pill{display:inline-block;border-radius:999px;padding:4px 12px;font-size:.8rem;
+        font-weight:600;background:var(--line);color:var(--ink)}
+  .pill.paid{background:var(--ok);color:#fff}
+  .row{display:flex;justify-content:space-between;padding:9px 0;
+       border-bottom:1px solid var(--line)}
+  .tot{display:flex;justify-content:space-between;font-weight:700;padding-top:12px;
+       margin-top:6px;border-top:2px solid var(--line)}
+  .num{font-size:1.15rem;font-weight:700;letter-spacing:.05em}
+  .muted{color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="home" href="/">← Back to the shop</a>
+  <h1>Find your order</h1>
+  <p class="sub">Enter the order number from your confirmation email, along with
+     the email address you used.</p>
+
+  <div class="card" id="card">
+    <div class="err" id="err" hidden></div>
+    <label for="num">Order number</label>
+    <input id="num" placeholder="ORD-XXXXXXXX" autocomplete="off" spellcheck="false">
+    <label for="email">Email address</label>
+    <input id="email" type="email" inputmode="email" autocomplete="email"
+           placeholder="you@example.com">
+    <button id="find" type="button">Find my order</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SYMBOL = "£";
+  function money(p) { return SYMBOL + (p / 100).toFixed(2); }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function showErr(msg) {
+    var e = $("err");
+    e.textContent = msg;
+    e.hidden = false;
+  }
+
+  function find() {
+    var num = $("num").value.trim();
+    var email = $("email").value.trim();
+    $("err").hidden = true;
+
+    if (!num || !email) {
+      showErr("Please fill in both the order number and your email address.");
+      return;
+    }
+
+    var btn = $("find");
+    btn.disabled = true;
+    btn.textContent = "Looking…";
+
+    fetch("/api/v1/orders/lookup?order_number=" + encodeURIComponent(num) +
+          "&email=" + encodeURIComponent(email))
+      .then(function (r) {
+        return r.json().then(function (b) {
+          if (!r.ok) throw new Error(b.detail || "We couldn't find that order.");
+          return b;
+        });
+      })
+      .then(render)
+      .catch(function (e) {
+        showErr(e.message);
+        btn.disabled = false;
+        btn.textContent = "Find my order";
+      });
+  }
+
+  function render(order) {
+    var card = $("card");
+    card.textContent = "";
+
+    var head = el("div", "row");
+    head.appendChild(el("span", "num", order.order_number));
+    var pill = el("span", "pill" + (order.status === "paid" ? " paid" : ""),
+                  order.status === "paid" ? "Paid" :
+                  order.status === "shipped" ? "Shipped" :
+                  order.status === "pending" ? "Awaiting payment" : order.status);
+    head.appendChild(pill);
+    card.appendChild(head);
+
+    order.items.forEach(function (i) {
+      var row = el("div", "row");
+      row.appendChild(el("span", null, i.qty + " × " + i.name));
+      row.appendChild(el("span", null, money(i.line_total_cents)));
+      card.appendChild(row);
+    });
+
+    var ship = el("div", "row");
+    ship.appendChild(el("span", "muted", "Shipping"));
+    ship.appendChild(el("span", "muted",
+      order.shipping_cents === 0 ? "Free" : money(order.shipping_cents)));
+    card.appendChild(ship);
+
+    var tot = el("div", "tot");
+    tot.appendChild(el("span", null, "Total"));
+    tot.appendChild(el("span", null, money(order.total_cents)));
+    card.appendChild(tot);
+
+    if (order.ship_name) {
+      var a = el("div", "muted");
+      a.style.marginTop = "16px";
+      a.textContent = "Delivering to " + order.ship_name +
+        (order.ship_city ? ", " + order.ship_city : "") +
+        (order.ship_postal ? " " + order.ship_postal : "");
+      card.appendChild(a);
+    }
+  }
+
+  $("find").addEventListener("click", find);
+  ["num", "email"].forEach(function (id) {
+    $(id).addEventListener("keydown", function (e) {
+      if (e.key === "Enter") find();
+    });
+  });
+
+  // Let a confirmation email deep-link straight to the order.
+  var p = new URLSearchParams(window.location.search);
+  if (p.get("order")) $("num").value = p.get("order");
+
+  fetch("/api/v1/config")
+    .then(function (r) { return r.json(); })
+    .then(function (c) { SYMBOL = c.currency_symbol || "£"; })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

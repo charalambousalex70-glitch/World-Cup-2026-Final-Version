@@ -29,6 +29,8 @@
   .brand{font-weight:700;font-size:1.15rem;letter-spacing:-.01em;
          background:none;border:0;color:inherit;padding:0}
   .spacer{flex:1}
+  .navlink{color:var(--muted);text-decoration:none;font-size:.9rem;font-weight:500}
+  .navlink:hover{color:var(--ink)}
   .cart-btn{position:relative;background:var(--accent);color:var(--accent-ink);
             border:0;border-radius:999px;padding:9px 18px;font-weight:600}
   .cart-count{position:absolute;top:-6px;right:-6px;background:var(--ink);
@@ -93,8 +95,18 @@
               background:var(--bg);color:var(--ink);font-weight:700}
   .rm{background:none;border:0;color:var(--muted);font-size:.82rem;
       text-decoration:underline;padding:0;margin-top:6px}
+  .sums{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+  .sum{display:flex;justify-content:space-between;color:var(--muted);font-size:.9rem}
   .totals{display:flex;justify-content:space-between;font-weight:700;
-          font-size:1.15rem;margin-bottom:14px}
+          font-size:1.15rem;margin-bottom:14px;padding-top:10px;
+          border-top:1px solid var(--line)}
+  .lbl{display:block;font-size:.82rem;color:var(--muted);margin-bottom:6px}
+  .inp{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;
+       background:var(--bg);color:var(--ink);font:inherit;margin-bottom:12px}
+  .inp:focus{outline:2px solid var(--accent);outline-offset:1px}
+  .err{background:#fde8e8;color:#9b1c1c;border-radius:10px;padding:10px 12px;
+       font-size:.86rem;margin-bottom:12px}
+  @media (prefers-color-scheme:dark){.err{background:#3b1d1d;color:#f8b4b4}}
   .checkout{width:100%;background:var(--accent);color:var(--accent-ink);border:0;
             border-radius:10px;padding:14px;font-weight:700}
   .checkout[disabled]{background:var(--line);color:var(--muted);cursor:not-allowed}
@@ -121,6 +133,7 @@
   <div class="bar">
     <button class="brand" id="brand" type="button">Store</button>
     <div class="spacer"></div>
+    <a class="navlink" href="/orders">Track order</a>
     <button class="cart-btn" id="openCart" type="button">
       Cart <span class="cart-count" id="cartCount" hidden>0</span>
     </button>
@@ -143,9 +156,19 @@
   </header>
   <div class="content" id="drawerBody"></div>
   <footer id="drawerFoot" hidden>
+    <div class="sums">
+      <div class="sum"><span>Subtotal</span><span id="subtotal">—</span></div>
+      <div class="sum"><span>Shipping</span><span id="shipping">—</span></div>
+    </div>
     <div class="totals"><span>Total</span><span id="total">—</span></div>
-    <button class="checkout" id="checkout" type="button" disabled>Checkout</button>
-    <div class="soon">Payment arrives in Phase 2</div>
+
+    <label class="lbl" for="email">Email for your receipt</label>
+    <input class="inp" id="email" type="email" inputmode="email"
+           autocomplete="email" placeholder="you@example.com">
+    <div class="err" id="checkoutErr" hidden></div>
+
+    <button class="checkout" id="checkout" type="button">Go to payment</button>
+    <div class="soon" id="payNote">You'll pay securely on Stripe. No account needed.</div>
   </footer>
 </aside>
 
@@ -157,9 +180,18 @@
 
   var API = "/api/v1";
   var CART_KEY = "store.cart.v1";
+  var EMAIL_KEY = "store.email.v1";
+  var PENDING_KEY = "store.pendingOrder";
   var SYMBOL = "£";
 
-  var state = { products: [], category: null, cart: loadCart(), view: "cart" };
+  var state = {
+    products: [], category: null, cart: loadCart(), view: "cart",
+    shipping: 0, checkoutAvailable: false, email: loadEmail()
+  };
+
+  function loadEmail() {
+    try { return localStorage.getItem(EMAIL_KEY) || ""; } catch (e) { return ""; }
+  }
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -404,8 +436,84 @@
       body.appendChild(row);
     });
 
-    $("total").textContent = money(cartTotal());
+    var sub = cartTotal();
+    var ship = state.cart.length ? state.shipping : 0;
+    $("subtotal").textContent = money(sub);
+    $("shipping").textContent = ship === 0 ? "Free" : money(ship);
+    $("total").textContent = money(sub + ship);
+    $("email").value = state.email;
+    hideError();
     foot.hidden = false;
+    applyCheckoutAvailability();
+  }
+
+  function applyCheckoutAvailability() {
+    var btn = $("checkout");
+    if (state.checkoutAvailable) {
+      btn.disabled = false;
+      btn.textContent = "Go to payment";
+      $("payNote").textContent = "You'll pay securely on Stripe. No account needed.";
+    } else {
+      btn.disabled = true;
+      btn.textContent = "Checkout unavailable";
+      $("payNote").textContent = "Card payments aren't switched on yet.";
+    }
+  }
+
+  function showError(text) {
+    var el = $("checkoutErr");
+    el.textContent = text;
+    el.hidden = false;
+  }
+
+  function hideError() {
+    $("checkoutErr").hidden = true;
+  }
+
+  function startCheckout() {
+    var email = $("email").value.trim();
+    // A deliberately loose check. The server validates properly; this exists
+    // only to catch a typo before a round-trip.
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showError("Please enter a valid email address for your receipt.");
+      $("email").focus();
+      return;
+    }
+    state.email = email;
+    try { localStorage.setItem(EMAIL_KEY, email); } catch (e) {}
+
+    var btn = $("checkout");
+    btn.disabled = true;
+    btn.textContent = "Taking you to payment…";
+    hideError();
+
+    fetch(API + "/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: email,
+        // Only what we want and how many. Never a price — the server looks
+        // those up itself, so editing this in dev-tools achieves nothing.
+        items: state.cart.map(function (l) { return { slug: l.slug, qty: l.qty }; })
+      })
+    })
+      .then(function (r) {
+        return r.json().then(function (body) {
+          if (!r.ok) throw new Error(body.detail || "Checkout failed.");
+          return body;
+        });
+      })
+      .then(function (body) {
+        // Remember the order so the thank-you page can clear the cart only
+        // after we know the payment actually went through.
+        try { sessionStorage.setItem(PENDING_KEY, body.order_number); } catch (e) {}
+        window.location.href = body.url;
+      })
+      .catch(function (err) {
+        showError(err.message || "Something went wrong. Please try again.");
+        btn.disabled = false;
+        btn.textContent = "Go to payment";
+      });
   }
 
   function showProduct(slug) {
@@ -525,14 +633,29 @@
 
     renderCount();
 
+    $("checkout").addEventListener("click", startCheckout);
+    $("email").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") startCheckout();
+    });
+
     fetch(API + "/config")
       .then(function (r) { return r.json(); })
       .then(function (cfg) {
         SYMBOL = cfg.currency_symbol || "£";
         document.title = cfg.store_name;
         $("brand").textContent = cfg.store_name;
+        state.shipping = cfg.shipping_cents || 0;
+        state.checkoutAvailable = !!cfg.checkout_available;
+        applyCheckoutAvailability();
       })
       .catch(function () { /* defaults are fine */ });
+
+    // Coming back from a cancelled Stripe payment: the cart is untouched, so
+    // just say so rather than leaving the shopper wondering what happened.
+    if (window.location.search.indexOf("checkout=cancelled") !== -1) {
+      toast("Payment cancelled — your cart is still here");
+      window.history.replaceState({}, "", "/");
+    }
 
     fetch(API + "/categories")
       .then(function (r) { return r.json(); })

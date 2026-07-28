@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import catalog
+from app.api import catalog, checkout
 from app.core.config import settings
 from app.core.database import Base, engine
 
@@ -31,7 +31,17 @@ async def lifespan(app: FastAPI):
     # schema changes are reviewable and reversible.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    log.info("Store API ready (%s)", "sqlite" if settings.is_sqlite else "postgres")
+
+    log.info("Store ready — %s database", "sqlite" if settings.is_sqlite else "postgres")
+
+    if not settings.stripe_configured:
+        log.warning("Stripe is not configured: browsing works, checkout is disabled.")
+    elif settings.stripe_live_mode:
+        # Loud on purpose. Real cards are being charged from this point on.
+        log.warning("STRIPE IS IN LIVE MODE — real payments will be taken.")
+    else:
+        log.info("Stripe in TEST mode — use card 4242 4242 4242 4242.")
+
     yield
     await engine.dispose()
 
@@ -49,6 +59,7 @@ app.add_middleware(
 )
 
 app.include_router(catalog.router, prefix=settings.API_V1, tags=["catalog"])
+app.include_router(checkout.router, prefix=settings.API_V1, tags=["checkout"])
 
 
 @app.get("/health")
@@ -64,6 +75,8 @@ async def public_config() -> dict:
         "store_name": settings.STORE_NAME,
         "currency": settings.CURRENCY,
         "currency_symbol": settings.CURRENCY_SYMBOL,
+        "shipping_cents": settings.SHIPPING_FLAT_CENTS,
+        "checkout_available": settings.stripe_configured,
     }
 
 
@@ -83,6 +96,18 @@ async def product_page(slug: str) -> FileResponse:
     """Deep links to a product still serve the same single page; the
     JavaScript reads the path and opens the right product."""
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/thanks")
+async def thanks_page() -> FileResponse:
+    """Where Stripe returns the customer after a successful payment."""
+    return FileResponse(WEB_DIR / "thanks.html")
+
+
+@app.get("/orders")
+async def orders_page() -> FileResponse:
+    """'Where is my order?' — guests have no account, so they look it up."""
+    return FileResponse(WEB_DIR / "orders.html")
 
 
 @app.exception_handler(500)

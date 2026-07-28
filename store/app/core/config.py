@@ -35,10 +35,35 @@ class Settings(BaseSettings):
     # products table stores a COMPLETE url, that switch needs no schema change.
     IMAGE_BASE_URL: str = "/images"
 
-    # --- Shipping (Phase 2) -------------------------------------------------
+    # --- Shipping -----------------------------------------------------------
     # Flat fee per order, in pence. 499 = £4.99. Kept in the environment so the
     # price can change without a code change; set to 0 for free shipping.
     SHIPPING_FLAT_CENTS: int = 499
+    # Two-letter country codes Stripe will let customers ship to.
+    SHIPPING_COUNTRIES: str = "GB"
+
+    # --- Stripe -------------------------------------------------------------
+    # No keys by default. Until both are present, checkout reports itself as
+    # unavailable rather than half-working — the same "refuse to guess"
+    # approach the sweepstake app takes with email.
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    # Where Stripe sends the customer back to. Railway sets this to the public
+    # url; locally it stays localhost.
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
+
+    @property
+    def stripe_configured(self) -> bool:
+        return bool(self.STRIPE_SECRET_KEY and self.STRIPE_WEBHOOK_SECRET)
+
+    @property
+    def stripe_live_mode(self) -> bool:
+        """True when real money would move. Used to refuse risky combinations."""
+        return self.STRIPE_SECRET_KEY.startswith("sk_live_")
+
+    @property
+    def shipping_country_list(self) -> list[str]:
+        return [c.strip().upper() for c in self.SHIPPING_COUNTRIES.split(",") if c.strip()]
 
     # --- CORS ---------------------------------------------------------------
     # Phase 1 serves the frontend from this same app, so no cross-origin calls
